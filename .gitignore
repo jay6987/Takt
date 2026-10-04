@@ -1,0 +1,11 @@
+build/
+out/
+.vscode/
+.DS_Store
+local/
+
+# Common CMake-generated artifacts
+CMakeFiles/
+CMakeCache.txt
+Testing/
+cmake_install.cmake

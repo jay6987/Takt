@@ -1,0 +1,5 @@
+add_subdirectory(basic)
+add_subdirectory(pipe)
+add_subdirectory(recordreplay)
+add_subdirectory(node)
+add_subdirectory(subgraph)
