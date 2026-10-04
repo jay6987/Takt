@@ -10,6 +10,10 @@
 #include <sstream>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace takt
 {
 namespace
@@ -104,6 +108,25 @@ class DefaultLogger final : public ILogger
             return {};
         }
 
+#ifdef _WIN32
+        const int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
+                                            static_cast<int>(w.size()), nullptr, 0,
+                                            nullptr, nullptr);
+        if (len <= 0)
+        {
+            return "[wstring-convert-failed]";
+        }
+
+        std::string buffer(static_cast<size_t>(len), '\0');
+        const int written = WideCharToMultiByte(
+            CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), buffer.data(), len,
+            nullptr, nullptr);
+        if (written <= 0)
+        {
+            return "[wstring-convert-failed]";
+        }
+        return buffer;
+#else
         std::mbstate_t state{};
         const wchar_t* src = w.c_str();
         const size_t len = std::wcsrtombs(nullptr, &src, 0, &state);
@@ -117,6 +140,7 @@ class DefaultLogger final : public ILogger
         src = w.c_str();
         std::wcsrtombs(buffer.data(), &src, buffer.size(), &state);
         return std::string(buffer.data());
+#endif
     }
 
     void write(const char* level, const std::string& message)

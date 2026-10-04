@@ -413,8 +413,10 @@ class CountingNode final : public takt::Node
 class StoppableNode final : public takt::Node
 {
   public:
-    explicit StoppableNode(std::atomic<bool>& observed_stop)
-        : takt::Node("stoppable-node"), observed_stop_(observed_stop)
+        StoppableNode(std::atomic<bool>& worker_started,
+                                    std::atomic<bool>& observed_stop)
+                : takt::Node("stoppable-node"), worker_started_(worker_started),
+                    observed_stop_(observed_stop)
     {
     }
 
@@ -434,6 +436,7 @@ class StoppableNode final : public takt::Node
 
     void process_task(size_t, takt::Node::Task&) override
     {
+        worker_started_.store(true, std::memory_order_relaxed);
         while (!stop_requested())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -442,6 +445,7 @@ class StoppableNode final : public takt::Node
     }
 
   private:
+    std::atomic<bool>& worker_started_;
     std::atomic<bool>& observed_stop_;
 };
 } // namespace
@@ -664,17 +668,27 @@ TEST(NodeTests, SubgraphNodeStartsAndJoinsInnerRuntime)
 
 TEST(NodeTests, SubgraphNodeRequestStopPropagatesToInnerRuntime)
 {
+    std::atomic<bool> worker_started{false};
     std::atomic<bool> observed_stop{false};
     std::vector<std::shared_ptr<takt::NodeBase>> inner_nodes;
-    inner_nodes.push_back(std::make_shared<StoppableNode>(observed_stop));
+    inner_nodes.push_back(
+        std::make_shared<StoppableNode>(worker_started, observed_stop));
 
     auto inner_runtime =
         std::make_shared<takt::PipelineRuntime>(std::move(inner_nodes));
     takt::SubgraphNode subgraph("sg-stop", inner_runtime);
 
     subgraph.start();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(200);
+    while (!worker_started.load(std::memory_order_relaxed) &&
+           std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     subgraph.request_stop();
     subgraph.join();
 
+    EXPECT_TRUE(worker_started.load(std::memory_order_relaxed));
     EXPECT_TRUE(observed_stop.load(std::memory_order_relaxed));
 }
