@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    env:
+      BUILD_TYPE: Release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DTAKT_BUILD_TESTS=ON
+          -DTAKT_BUILD_EXAMPLES=ON
+          -DTAKT_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
+
+      - name: Build
+        run: cmake --build build --config ${BUILD_TYPE} --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config ${BUILD_TYPE} --output-on-failure
