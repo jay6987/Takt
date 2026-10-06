@@ -413,9 +413,9 @@ class CountingNode final : public takt::Node
 class StoppableNode final : public takt::Node
 {
   public:
-        StoppableNode(std::atomic<bool>& worker_started,
+        StoppableNode(std::promise<void>& started_promise,
                                     std::atomic<bool>& observed_stop)
-                : takt::Node("stoppable-node"), worker_started_(worker_started),
+                : takt::Node("stoppable-node"), started_promise_(started_promise),
                     observed_stop_(observed_stop)
     {
     }
@@ -436,7 +436,7 @@ class StoppableNode final : public takt::Node
 
     void process_task(size_t, takt::Node::Task&) override
     {
-        worker_started_.store(true, std::memory_order_relaxed);
+        started_promise_.set_value();
         while (!stop_requested())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -445,7 +445,7 @@ class StoppableNode final : public takt::Node
     }
 
   private:
-    std::atomic<bool>& worker_started_;
+    std::promise<void>& started_promise_;
     std::atomic<bool>& observed_stop_;
 };
 } // namespace
@@ -668,27 +668,22 @@ TEST(NodeTests, SubgraphNodeStartsAndJoinsInnerRuntime)
 
 TEST(NodeTests, SubgraphNodeRequestStopPropagatesToInnerRuntime)
 {
-    std::atomic<bool> worker_started{false};
+    std::promise<void> worker_started_promise;
+    auto worker_started = worker_started_promise.get_future();
     std::atomic<bool> observed_stop{false};
     std::vector<std::shared_ptr<takt::NodeBase>> inner_nodes;
     inner_nodes.push_back(
-        std::make_shared<StoppableNode>(worker_started, observed_stop));
+        std::make_shared<StoppableNode>(worker_started_promise, observed_stop));
 
     auto inner_runtime =
         std::make_shared<takt::PipelineRuntime>(std::move(inner_nodes));
     takt::SubgraphNode subgraph("sg-stop", inner_runtime);
 
     subgraph.start();
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(200);
-    while (!worker_started.load(std::memory_order_relaxed) &&
-           std::chrono::steady_clock::now() < deadline)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    ASSERT_EQ(worker_started.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
     subgraph.request_stop();
     subgraph.join();
 
-    EXPECT_TRUE(worker_started.load(std::memory_order_relaxed));
     EXPECT_TRUE(observed_stop.load(std::memory_order_relaxed));
 }
