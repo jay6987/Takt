@@ -219,7 +219,9 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
 
     {
         takt::Pipe<int> record_pipe("record-int", 8, 0);
-        takt::recordreplay::set_record(record_pipe, file_path);
+        auto record =
+            takt::recordreplay::make_scoped_record(record_pipe, file_path);
+        ASSERT_TRUE(record.active());
 
         {
             auto w = record_pipe.acquire_write_batch(3, true);
@@ -228,12 +230,13 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
             w.value(2) = 303;
             w.publish();
         }
-        takt::recordreplay::clear_record(record_pipe);
     }
 
     {
         takt::Pipe<int> replay_pipe("replay-int", 8, 0);
-        takt::recordreplay::set_replay(replay_pipe, file_path);
+        auto replay =
+            takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
+        ASSERT_TRUE(replay.active());
 
         {
             auto w = replay_pipe.acquire_write_batch(3, true);
@@ -249,7 +252,6 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
             EXPECT_EQ(r.value(1), 202);
             EXPECT_EQ(r.value(2), 303);
         }
-        takt::recordreplay::clear_replay(replay_pipe);
     }
 
     std::filesystem::remove(file_path);
@@ -410,7 +412,6 @@ TEST(PipeTests, ConcurrentWritersReadersPreserveDataIntegrity)
                 }
             }));
     }
-
     std::vector<std::future<void>> readers;
     readers.reserve(kReaders);
     for (int i = 0; i < kReaders; ++i)

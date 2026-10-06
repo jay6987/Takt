@@ -185,6 +185,150 @@ template <typename T> void clear_replay(Pipe<T>& pipe)
     detail::RecordReplayRegistry::instance().clear_replay(pipe);
 }
 
+template <typename T> class ScopedRecord
+{
+  public:
+    ScopedRecord(Pipe<T>& pipe, std::string file_path)
+        : pipe_(&pipe), active_(true)
+    {
+        set_record(*pipe_, file_path);
+    }
+
+    ~ScopedRecord()
+    {
+        reset();
+    }
+
+    ScopedRecord(const ScopedRecord&) = delete;
+    ScopedRecord& operator=(const ScopedRecord&) = delete;
+
+    ScopedRecord(ScopedRecord&& rhs) noexcept
+        : pipe_(std::exchange(rhs.pipe_, nullptr)), active_(rhs.active_)
+    {
+        rhs.active_ = false;
+    }
+
+    ScopedRecord& operator=(ScopedRecord&& rhs) noexcept
+    {
+        if (this == &rhs)
+        {
+            return *this;
+        }
+
+        reset();
+        pipe_ = std::exchange(rhs.pipe_, nullptr);
+        active_ = rhs.active_;
+        rhs.active_ = false;
+        return *this;
+    }
+
+    void reset() noexcept
+    {
+        if (!pipe_ || !active_)
+        {
+            return;
+        }
+
+        try
+        {
+            clear_record(*pipe_);
+        }
+        catch (...)
+        {
+        }
+
+        pipe_ = nullptr;
+        active_ = false;
+    }
+
+    bool active() const noexcept
+    {
+        return active_;
+    }
+
+  private:
+    Pipe<T>* pipe_ = nullptr;
+    bool active_ = false;
+};
+
+template <typename T> class ScopedReplay
+{
+  public:
+    ScopedReplay(Pipe<T>& pipe, std::string file_path)
+        : pipe_(&pipe), active_(true)
+    {
+        set_replay(*pipe_, file_path);
+    }
+
+    ~ScopedReplay()
+    {
+        reset();
+    }
+
+    ScopedReplay(const ScopedReplay&) = delete;
+    ScopedReplay& operator=(const ScopedReplay&) = delete;
+
+    ScopedReplay(ScopedReplay&& rhs) noexcept
+        : pipe_(std::exchange(rhs.pipe_, nullptr)), active_(rhs.active_)
+    {
+        rhs.active_ = false;
+    }
+
+    ScopedReplay& operator=(ScopedReplay&& rhs) noexcept
+    {
+        if (this == &rhs)
+        {
+            return *this;
+        }
+
+        reset();
+        pipe_ = std::exchange(rhs.pipe_, nullptr);
+        active_ = rhs.active_;
+        rhs.active_ = false;
+        return *this;
+    }
+
+    void reset() noexcept
+    {
+        if (!pipe_ || !active_)
+        {
+            return;
+        }
+
+        try
+        {
+            clear_replay(*pipe_);
+        }
+        catch (...)
+        {
+        }
+
+        pipe_ = nullptr;
+        active_ = false;
+    }
+
+    bool active() const noexcept
+    {
+        return active_;
+    }
+
+  private:
+    Pipe<T>* pipe_ = nullptr;
+    bool active_ = false;
+};
+
+template <typename T>
+ScopedRecord<T> make_scoped_record(Pipe<T>& pipe, std::string file_path)
+{
+    return ScopedRecord<T>(pipe, std::move(file_path));
+}
+
+template <typename T>
+ScopedReplay<T> make_scoped_replay(Pipe<T>& pipe, std::string file_path)
+{
+    return ScopedReplay<T>(pipe, std::move(file_path));
+}
+
 template <typename T> void attach_record(Pipe<T>& pipe, const std::string& file_path)
 {
     set_record(pipe, file_path);
