@@ -187,12 +187,16 @@ class FaultyMultiWorkerAgent final : public takt::Node
 
     void on_exception(const takt::NodeExceptionContext& context) override
     {
-        captured_ = context;
-        has_capture_ = true;
+        {
+            std::lock_guard<std::mutex> lk(capture_mutex_);
+            captured_ = context;
+            has_capture_ = true;
+        }
         takt::Node::on_exception(context);
     }
 
   private:
+    std::mutex capture_mutex_;
     takt::NodeExceptionContext captured_;
     bool has_capture_ = false;
 };
