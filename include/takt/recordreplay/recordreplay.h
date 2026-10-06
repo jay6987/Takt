@@ -19,6 +19,9 @@ template <typename T> class Pipe;
 
 namespace recordreplay
 {
+template <typename T> class ScopedRecord;
+template <typename T> class ScopedReplay;
+
 template <typename T> struct PipeCodec
 {
     std::function<void(std::ostream&, const T&)> record_one;
@@ -38,28 +41,37 @@ class RecordReplayRegistry
                             make_erased_codec<T>(std::move(codec)));
     }
 
-    template <typename T> void set_record(Pipe<T>& pipe, const std::string& file_path)
+    private:
+        template <typename T> friend class ::takt::recordreplay::ScopedRecord;
+        template <typename T> friend class ::takt::recordreplay::ScopedReplay;
+
+        template <typename T>
+        void set_record(Pipe<T>& pipe, const std::string& file_path)
     {
         static_cast<void>(resolve_codec_for_type<T>());
         set_record_impl(std::type_index(typeid(T)), &pipe, file_path);
     }
 
-    template <typename T> void set_replay(Pipe<T>& pipe, const std::string& file_path)
+    template <typename T>
+    void set_replay(Pipe<T>& pipe, const std::string& file_path)
     {
         static_cast<void>(resolve_codec_for_type<T>());
         set_replay_impl(std::type_index(typeid(T)), &pipe, file_path);
     }
 
-    template <typename T> void clear_record(Pipe<T>& pipe)
+    template <typename T>
+    void clear_record(Pipe<T>& pipe)
     {
         clear_record_impl(std::type_index(typeid(T)), &pipe);
     }
 
-    template <typename T> void clear_replay(Pipe<T>& pipe)
+    template <typename T>
+    void clear_replay(Pipe<T>& pipe)
     {
         clear_replay_impl(std::type_index(typeid(T)), &pipe);
     }
 
+    public:
     template <typename T>
     void try_record_slots(Pipe<T>& pipe, const std::vector<size_t>& slots,
                           const std::vector<T>& baskets) noexcept
@@ -237,7 +249,7 @@ template <typename T> class ScopedReplay
     ScopedReplay(Pipe<T>& pipe, std::string file_path)
         : pipe_(&pipe), active_(true)
     {
-                detail::RecordReplayRegistry::instance().set_replay(*pipe_, file_path);
+        detail::RecordReplayRegistry::instance().set_replay(*pipe_, file_path);
     }
 
     ~ScopedReplay()
