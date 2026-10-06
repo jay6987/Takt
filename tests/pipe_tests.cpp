@@ -221,11 +221,14 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
         takt::Pipe<int> record_pipe("record-int", 8, 0);
         takt::recordreplay::set_record(record_pipe, file_path);
 
-        auto w = record_pipe.acquire_write_batch(3, true);
-        w.value(0) = 101;
-        w.value(1) = 202;
-        w.value(2) = 303;
-        w.publish();
+        {
+            auto w = record_pipe.acquire_write_batch(3, true);
+            w.value(0) = 101;
+            w.value(1) = 202;
+            w.value(2) = 303;
+            w.publish();
+        }
+        takt::recordreplay::clear_record(record_pipe);
     }
 
     {
@@ -240,10 +243,13 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
             w.publish();
         }
 
-        auto r = replay_pipe.acquire_read_batch(3, 0);
-        EXPECT_EQ(r.value(0), 101);
-        EXPECT_EQ(r.value(1), 202);
-        EXPECT_EQ(r.value(2), 303);
+        {
+            auto r = replay_pipe.acquire_read_batch(3, 0);
+            EXPECT_EQ(r.value(0), 101);
+            EXPECT_EQ(r.value(1), 202);
+            EXPECT_EQ(r.value(2), 303);
+        }
+        takt::recordreplay::clear_replay(replay_pipe);
     }
 
     std::filesystem::remove(file_path);
