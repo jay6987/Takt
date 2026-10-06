@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -264,7 +265,83 @@ TEST(PipeTests, ExternalRecordReplayRequiresCodecForNonTrivialType)
                                .string();
 
     takt::Pipe<NonTrivialPayload> pipe("nontrivial", 2, NonTrivialPayload{});
-    EXPECT_THROW(takt::recordreplay::set_record(pipe, file_path), std::runtime_error);
+    EXPECT_THROW(takt::recordreplay::make_scoped_record(pipe, file_path),
+                 std::runtime_error);
+}
+
+TEST(PipeTests, ScopedRecordAndReplayAreMoveOnly)
+{
+    static_assert(!std::is_copy_constructible_v<takt::recordreplay::ScopedRecord<int>>);
+    static_assert(!std::is_copy_assignable_v<takt::recordreplay::ScopedRecord<int>>);
+    static_assert(std::is_move_constructible_v<takt::recordreplay::ScopedRecord<int>>);
+    static_assert(std::is_move_assignable_v<takt::recordreplay::ScopedRecord<int>>);
+
+    static_assert(!std::is_copy_constructible_v<takt::recordreplay::ScopedReplay<int>>);
+    static_assert(!std::is_copy_assignable_v<takt::recordreplay::ScopedReplay<int>>);
+    static_assert(std::is_move_constructible_v<takt::recordreplay::ScopedReplay<int>>);
+    static_assert(std::is_move_assignable_v<takt::recordreplay::ScopedReplay<int>>);
+}
+
+TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
+{
+    const auto file_path =
+        (std::filesystem::temp_directory_path() / "takt_record_replay_scoped_move.bin")
+            .string();
+
+    {
+        takt::Pipe<int> record_pipe("record-scoped-move", 8, 0);
+        auto record =
+            takt::recordreplay::make_scoped_record(record_pipe, file_path);
+        EXPECT_TRUE(record.active());
+
+        auto moved_record = std::move(record);
+        EXPECT_FALSE(record.active());
+        EXPECT_TRUE(moved_record.active());
+
+        {
+            auto w = record_pipe.acquire_write_batch(3, true);
+            w.value(0) = 7;
+            w.value(1) = 8;
+            w.value(2) = 9;
+            w.publish();
+        }
+
+        moved_record.reset();
+        EXPECT_FALSE(moved_record.active());
+        moved_record.reset();
+    }
+
+    {
+        takt::Pipe<int> replay_pipe("replay-scoped-move", 8, 0);
+        auto replay =
+            takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
+        EXPECT_TRUE(replay.active());
+
+        auto moved_replay = std::move(replay);
+        EXPECT_FALSE(replay.active());
+        EXPECT_TRUE(moved_replay.active());
+
+        {
+            auto w = replay_pipe.acquire_write_batch(3, true);
+            w.value(0) = -1;
+            w.value(1) = -1;
+            w.value(2) = -1;
+            w.publish();
+        }
+
+        {
+            auto r = replay_pipe.acquire_read_batch(3, 0);
+            EXPECT_EQ(r.value(0), 7);
+            EXPECT_EQ(r.value(1), 8);
+            EXPECT_EQ(r.value(2), 9);
+        }
+
+        moved_replay.reset();
+        EXPECT_FALSE(moved_replay.active());
+        moved_replay.reset();
+    }
+
+    std::filesystem::remove(file_path);
 }
 
 TEST(PipeTests, LaterPublishedWriteDoesNotBypassEarlierUnpublishedWrite)

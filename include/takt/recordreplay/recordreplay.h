@@ -165,33 +165,13 @@ template <typename T> void register_codec(PipeCodec<T> codec)
     detail::RecordReplayRegistry::instance().register_codec<T>(std::move(codec));
 }
 
-template <typename T> void set_record(Pipe<T>& pipe, const std::string& file_path)
-{
-    detail::RecordReplayRegistry::instance().set_record(pipe, file_path);
-}
-
-template <typename T> void set_replay(Pipe<T>& pipe, const std::string& file_path)
-{
-    detail::RecordReplayRegistry::instance().set_replay(pipe, file_path);
-}
-
-template <typename T> void clear_record(Pipe<T>& pipe)
-{
-    detail::RecordReplayRegistry::instance().clear_record(pipe);
-}
-
-template <typename T> void clear_replay(Pipe<T>& pipe)
-{
-    detail::RecordReplayRegistry::instance().clear_replay(pipe);
-}
-
 template <typename T> class ScopedRecord
 {
   public:
     ScopedRecord(Pipe<T>& pipe, std::string file_path)
         : pipe_(&pipe), active_(true)
     {
-        set_record(*pipe_, file_path);
+        detail::RecordReplayRegistry::instance().set_record(*pipe_, file_path);
     }
 
     ~ScopedRecord()
@@ -231,7 +211,7 @@ template <typename T> class ScopedRecord
 
         try
         {
-            clear_record(*pipe_);
+            detail::RecordReplayRegistry::instance().clear_record(*pipe_);
         }
         catch (...)
         {
@@ -257,7 +237,7 @@ template <typename T> class ScopedReplay
     ScopedReplay(Pipe<T>& pipe, std::string file_path)
         : pipe_(&pipe), active_(true)
     {
-        set_replay(*pipe_, file_path);
+                detail::RecordReplayRegistry::instance().set_replay(*pipe_, file_path);
     }
 
     ~ScopedReplay()
@@ -297,7 +277,7 @@ template <typename T> class ScopedReplay
 
         try
         {
-            clear_replay(*pipe_);
+            detail::RecordReplayRegistry::instance().clear_replay(*pipe_);
         }
         catch (...)
         {
@@ -327,16 +307,6 @@ template <typename T>
 ScopedReplay<T> make_scoped_replay(Pipe<T>& pipe, std::string file_path)
 {
     return ScopedReplay<T>(pipe, std::move(file_path));
-}
-
-template <typename T> void attach_record(Pipe<T>& pipe, const std::string& file_path)
-{
-    set_record(pipe, file_path);
-}
-
-template <typename T> void attach_replay(Pipe<T>& pipe, const std::string& file_path)
-{
-    set_replay(pipe, file_path);
 }
 } // namespace recordreplay
 } // namespace takt
