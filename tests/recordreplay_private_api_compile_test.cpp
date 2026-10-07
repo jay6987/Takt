@@ -5,7 +5,10 @@ void test_registry_binding_access(takt::Pipe<int>& pipe)
     using Registry = takt::recordreplay::detail::RecordReplayRegistry;
     auto& registry = Registry::instance();
 
-#if defined(TAKT_TEST_SET_RECORD_PRIVATE)
+#if defined(TAKT_TEST_PUBLIC_API_CONTROL)
+    static_cast<void>(pipe);
+    static_cast<void>(registry);
+#elif defined(TAKT_TEST_SET_RECORD_PRIVATE)
     registry.set_record(pipe, "record.bin");
 #elif defined(TAKT_TEST_SET_REPLAY_PRIVATE)
     registry.set_replay(pipe, "replay.bin");
