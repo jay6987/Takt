@@ -194,6 +194,7 @@ template <typename T> class ScopedRecord
         }
         catch (...)
         {
+            // Destruction is best-effort; failed reset leaves active_ unchanged until lifetime ends.
         }
     }
 
@@ -259,6 +260,7 @@ template <typename T> class ScopedReplay
         }
         catch (...)
         {
+            // Destruction is best-effort; failed reset leaves active_ unchanged until lifetime ends.
         }
     }
 
