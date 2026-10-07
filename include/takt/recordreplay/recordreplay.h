@@ -194,7 +194,8 @@ template <typename T> class ScopedRecord
         }
         catch (...)
         {
-            // Destruction is best-effort; failed reset leaves active_ unchanged until lifetime ends.
+            // Unlike explicit reset(), destruction cannot report failures; cleanup is
+            // best-effort, and active_ remains unchanged until this object's lifetime ends.
         }
     }
 
@@ -260,7 +261,8 @@ template <typename T> class ScopedReplay
         }
         catch (...)
         {
-            // Destruction is best-effort; failed reset leaves active_ unchanged until lifetime ends.
+            // Unlike explicit reset(), destruction cannot report failures; cleanup is
+            // best-effort, and active_ remains unchanged until this object's lifetime ends.
         }
     }
 
