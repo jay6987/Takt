@@ -20,6 +20,11 @@ struct NonTrivialPayload
 {
     std::string text;
 };
+
+struct FailingRecordPayload
+{
+    std::string text;
+};
 } // namespace
 
 TEST(PipeTests, SingleElementReadWrite)
@@ -269,17 +274,51 @@ TEST(PipeTests, ExternalRecordReplayRequiresCodecForNonTrivialType)
                  std::runtime_error);
 }
 
+TEST(PipeTests, ScopedRecordResetReportsStreamFailure)
+{
+    takt::recordreplay::PipeCodec<FailingRecordPayload> codec;
+    codec.record_one = [](std::ostream& stream, const FailingRecordPayload&)
+    { stream.setstate(std::ios::badbit); };
+    codec.replay_one = [](std::istream&, FailingRecordPayload&) {};
+    takt::recordreplay::register_codec<FailingRecordPayload>(std::move(codec));
+
+    const auto file_path =
+        (std::filesystem::temp_directory_path() / "takt_record_replay_failed_reset.bin")
+            .string();
+    takt::Pipe<FailingRecordPayload> pipe("failed-record-reset", 2,
+                                         FailingRecordPayload{});
+    auto record = takt::recordreplay::make_scoped_record(pipe, file_path);
+
+    {
+        auto write = pipe.acquire_write(true);
+        write.value().text = "trigger stream failure";
+        write.publish();
+    }
+
+    EXPECT_THROW(record.reset(), std::runtime_error);
+    EXPECT_TRUE(record.active());
+    EXPECT_NO_THROW(record.reset());
+    EXPECT_FALSE(record.active());
+    std::filesystem::remove(file_path);
+}
+
 TEST(PipeTests, ScopedRecordAndReplayAreMoveOnly)
 {
     static_assert(!std::is_copy_constructible_v<takt::recordreplay::ScopedRecord<int>>);
     static_assert(!std::is_copy_assignable_v<takt::recordreplay::ScopedRecord<int>>);
     static_assert(std::is_move_constructible_v<takt::recordreplay::ScopedRecord<int>>);
     static_assert(std::is_move_assignable_v<takt::recordreplay::ScopedRecord<int>>);
+    static_assert(!noexcept(std::declval<takt::recordreplay::ScopedRecord<int>&>().reset()));
+    static_assert(!std::is_nothrow_move_assignable_v<takt::recordreplay::ScopedRecord<int>>);
+    static_assert(std::is_nothrow_destructible_v<takt::recordreplay::ScopedRecord<int>>);
 
     static_assert(!std::is_copy_constructible_v<takt::recordreplay::ScopedReplay<int>>);
     static_assert(!std::is_copy_assignable_v<takt::recordreplay::ScopedReplay<int>>);
     static_assert(std::is_move_constructible_v<takt::recordreplay::ScopedReplay<int>>);
     static_assert(std::is_move_assignable_v<takt::recordreplay::ScopedReplay<int>>);
+    static_assert(!noexcept(std::declval<takt::recordreplay::ScopedReplay<int>&>().reset()));
+    static_assert(!std::is_nothrow_move_assignable_v<takt::recordreplay::ScopedReplay<int>>);
+    static_assert(std::is_nothrow_destructible_v<takt::recordreplay::ScopedReplay<int>>);
 }
 
 TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)

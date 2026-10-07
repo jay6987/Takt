@@ -11,8 +11,8 @@ struct RecordReplayRegistry::PipeChannel
     explicit PipeChannel(std::type_index type_index) : type(type_index) {}
 
     std::type_index type;
-    std::shared_ptr<std::ostream> record;
-    std::shared_ptr<std::istream> replay;
+    std::shared_ptr<std::ofstream> record;
+    std::shared_ptr<std::ifstream> replay;
     std::mutex io_mutex;
 };
 
@@ -74,7 +74,22 @@ void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* p
     }
 
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
+    auto stream = channel->record;
+    if (!stream)
+    {
+        return;
+    }
+
+    stream->flush();
+    const bool flush_failed = stream->fail();
+    stream->close();
+    const bool close_failed = stream->fail();
     channel->record.reset();
+
+    if (flush_failed || close_failed)
+    {
+        throw std::runtime_error("failed to flush or close record stream");
+    }
 }
 
 void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* pipe_id)
@@ -91,7 +106,20 @@ void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* p
     }
 
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
+    auto stream = channel->replay;
+    if (!stream)
+    {
+        return;
+    }
+
+    stream->close();
+    const bool close_failed = stream->fail();
     channel->replay.reset();
+
+    if (close_failed)
+    {
+        throw std::runtime_error("failed to close replay stream");
+    }
 }
 
 std::optional<RecordReplayRegistry::TypeErasedCodec>
@@ -124,6 +152,11 @@ void RecordReplayRegistry::try_record_slots_impl(
         }
 
         std::lock_guard<std::mutex> io_lk(channel->io_mutex);
+        if (!channel->record)
+        {
+            return;
+        }
+
         const auto* basket_bytes = static_cast<const char*>(baskets);
         for (size_t slot : slots)
         {
@@ -154,6 +187,11 @@ void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* p
     }
 
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
+    if (!channel->replay)
+    {
+        return;
+    }
+
     auto* basket_bytes = static_cast<char*>(baskets);
     for (size_t slot : slots)
     {

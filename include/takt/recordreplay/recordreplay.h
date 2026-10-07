@@ -186,9 +186,15 @@ template <typename T> class ScopedRecord
         detail::RecordReplayRegistry::instance().set_record(*pipe_, file_path);
     }
 
-    ~ScopedRecord()
+    ~ScopedRecord() noexcept
     {
-        reset();
+        try
+        {
+            reset();
+        }
+        catch (...)
+        {
+        }
     }
 
     ScopedRecord(const ScopedRecord&) = delete;
@@ -200,7 +206,7 @@ template <typename T> class ScopedRecord
         rhs.active_ = false;
     }
 
-    ScopedRecord& operator=(ScopedRecord&& rhs) noexcept
+    ScopedRecord& operator=(ScopedRecord&& rhs)
     {
         if (this == &rhs)
         {
@@ -214,21 +220,14 @@ template <typename T> class ScopedRecord
         return *this;
     }
 
-    void reset() noexcept
+    void reset()
     {
         if (!pipe_ || !active_)
         {
             return;
         }
 
-        try
-        {
-            detail::RecordReplayRegistry::instance().clear_record(*pipe_);
-        }
-        catch (...)
-        {
-        }
-
+        detail::RecordReplayRegistry::instance().clear_record(*pipe_);
         pipe_ = nullptr;
         active_ = false;
     }
@@ -252,9 +251,15 @@ template <typename T> class ScopedReplay
         detail::RecordReplayRegistry::instance().set_replay(*pipe_, file_path);
     }
 
-    ~ScopedReplay()
+    ~ScopedReplay() noexcept
     {
-        reset();
+        try
+        {
+            reset();
+        }
+        catch (...)
+        {
+        }
     }
 
     ScopedReplay(const ScopedReplay&) = delete;
@@ -266,7 +271,7 @@ template <typename T> class ScopedReplay
         rhs.active_ = false;
     }
 
-    ScopedReplay& operator=(ScopedReplay&& rhs) noexcept
+    ScopedReplay& operator=(ScopedReplay&& rhs)
     {
         if (this == &rhs)
         {
@@ -280,21 +285,14 @@ template <typename T> class ScopedReplay
         return *this;
     }
 
-    void reset() noexcept
+    void reset()
     {
         if (!pipe_ || !active_)
         {
             return;
         }
 
-        try
-        {
-            detail::RecordReplayRegistry::instance().clear_replay(*pipe_);
-        }
-        catch (...)
-        {
-        }
-
+        detail::RecordReplayRegistry::instance().clear_replay(*pipe_);
         pipe_ = nullptr;
         active_ = false;
     }
