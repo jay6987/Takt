@@ -1,6 +1,7 @@
 #include "takt/recordreplay/recordreplay.h"
 
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <typeindex>
 #include <utility>
@@ -116,12 +117,35 @@ void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* p
     }
 
     auto stream = channel->record;
-    stream->flush();
+    std::exception_ptr cleanup_exception;
+    try
+    {
+        stream->exceptions(std::ios::goodbit);
+        stream->flush();
+    }
+    catch (...)
+    {
+        cleanup_exception = std::current_exception();
+    }
     const bool flush_failed = stream->fail();
-    stream->close();
+    try
+    {
+        stream->close();
+    }
+    catch (...)
+    {
+        if (!cleanup_exception)
+        {
+            cleanup_exception = std::current_exception();
+        }
+    }
     const bool close_failed = stream->fail();
     channel->record.reset();
 
+    if (cleanup_exception)
+    {
+        std::rethrow_exception(cleanup_exception);
+    }
     if (flush_failed || close_failed)
     {
         throw std::runtime_error("failed to flush or close record stream");
@@ -149,10 +173,23 @@ void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* p
     }
 
     auto stream = channel->replay;
-    stream->close();
+    std::exception_ptr cleanup_exception;
+    try
+    {
+        stream->exceptions(std::ios::goodbit);
+        stream->close();
+    }
+    catch (...)
+    {
+        cleanup_exception = std::current_exception();
+    }
     const bool close_failed = stream->fail();
     channel->replay.reset();
 
+    if (cleanup_exception)
+    {
+        std::rethrow_exception(cleanup_exception);
+    }
     if (close_failed)
     {
         throw std::runtime_error("failed to close replay stream");

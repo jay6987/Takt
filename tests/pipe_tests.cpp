@@ -7,6 +7,7 @@
 #include <future>
 #include <mutex>
 #include <stdexcept>
+#include <streambuf>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -26,13 +27,40 @@ struct FailingRecordPayload
     std::string text;
 };
 
+class FailingSyncStreamBuffer : public std::streambuf
+{
+    public:
+        void reset()
+        {
+                sync_count_ = 0;
+        }
+
+    protected:
+        int sync() override
+        {
+                return ++sync_count_ == 2 ? -1 : 0;
+        }
+
+    private:
+        int sync_count_ = 0;
+};
+
+FailingSyncStreamBuffer failing_sync_stream_buffer;
+
 void register_failing_record_codec()
 {
+    failing_sync_stream_buffer.reset();
     takt::recordreplay::PipeCodec<FailingRecordPayload> codec;
-    codec.record_one = [](std::ostream& stream, const FailingRecordPayload&)
-    { stream.setstate(std::ios::badbit); };
+        codec.record_one = [](std::ostream& stream, const FailingRecordPayload&)
+    {
+        stream.rdbuf(&failing_sync_stream_buffer);
+        stream.exceptions(std::ios::badbit | std::ios::failbit);
+    };
     codec.replay_one = [](std::istream& stream, FailingRecordPayload&)
-    { stream.setstate(std::ios::badbit); };
+    {
+        stream.exceptions(std::ios::badbit | std::ios::failbit);
+        stream.setstate(std::ios::badbit);
+    };
     takt::recordreplay::register_codec<FailingRecordPayload>(std::move(codec));
 }
 } // namespace
@@ -449,7 +477,8 @@ TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
         (std::filesystem::temp_directory_path() / "takt_record_move_assign_old.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() / "takt_record_move_assign_source.bin")
+        (std::filesystem::temp_directory_path() /
+         "takt_record_move_assign_source.bin")
             .string();
 
     {
@@ -492,7 +521,8 @@ TEST(PipeTests, ScopedReplayMoveAssignmentTransfersBinding)
         (std::filesystem::temp_directory_path() / "takt_replay_move_assign_old.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_source.bin")
+        (std::filesystem::temp_directory_path() /
+         "takt_replay_move_assign_source.bin")
             .string();
     {
         std::ofstream old_file(old_path, std::ios::binary);
@@ -536,7 +566,8 @@ TEST(PipeTests, ScopedRecordMoveAssignmentFailurePreservesSource)
         (std::filesystem::temp_directory_path() / "takt_record_move_assign_failure.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() / "takt_record_move_assign_source.bin")
+        (std::filesystem::temp_directory_path() /
+         "takt_record_move_assign_failure_source.bin")
             .string();
 
     {
@@ -573,7 +604,8 @@ TEST(PipeTests, ScopedReplayMoveAssignmentFailurePreservesSource)
         (std::filesystem::temp_directory_path() / "takt_replay_move_assign_failure.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_source.bin")
+        (std::filesystem::temp_directory_path() /
+         "takt_replay_move_assign_failure_source.bin")
             .string();
     {
         std::ofstream target_file(target_path, std::ios::binary);
