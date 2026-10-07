@@ -8,7 +8,7 @@ For trivially copyable payloads (for example `int`), no codec registration is ne
 
 ```cpp
 takt::Pipe<int> record_pipe("record-int", 8, 0);
-takt::recordreplay::set_record(record_pipe, file_path);
+auto record = takt::recordreplay::make_scoped_record(record_pipe, file_path);
 
 auto w = record_pipe.acquire_write_batch(3, true);
 w.value(0) = 101;
@@ -21,7 +21,7 @@ Replay:
 
 ```cpp
 takt::Pipe<int> replay_pipe("replay-int", 8, 0);
-takt::recordreplay::set_replay(replay_pipe, file_path);
+auto replay = takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
 
 {
     auto seed = replay_pipe.acquire_write_batch(3, true);
@@ -33,6 +33,10 @@ takt::recordreplay::set_replay(replay_pipe, file_path);
 
 auto r = replay_pipe.acquire_read_batch(3, 0);
 ```
+
+The scoped guard must outlive the record/replay phase, and the pipe must outlive
+the guard. Destruction detaches the stream without throwing. Call `reset()` when
+you need to observe flush or close failures; an error is reported as an exception.
 
 ## Non-trivial Types
 
@@ -60,7 +64,7 @@ Run after build:
 
 If you want to see where `Pipe<int>` record/replay behavior is implemented:
 
-1. Public API entry points (`set_record`, `set_replay`, codec resolution):
+1. Public API entry points (`make_scoped_record`, `make_scoped_replay`, codec registration and resolution):
     - `include/takt/recordreplay/recordreplay.h`
 2. Stream/file and registry implementation:
     - `src/recordreplay/recordreplay.cpp`
