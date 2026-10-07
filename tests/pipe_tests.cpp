@@ -308,6 +308,98 @@ TEST(PipeTests, ScopedRecordResetReportsStreamFailure)
     std::filesystem::remove(file_path);
 }
 
+TEST(PipeTests, FailedRecordGuardCannotClearReplacementBinding)
+{
+    register_failing_record_codec();
+    const auto failed_path =
+        (std::filesystem::temp_directory_path() / "takt_record_stale_guard_failed.bin")
+            .string();
+    const auto replacement_path =
+        (std::filesystem::temp_directory_path() / "takt_record_stale_guard_replacement.bin")
+            .string();
+    const auto duplicate_path =
+        (std::filesystem::temp_directory_path() / "takt_record_stale_guard_duplicate.bin")
+            .string();
+
+    {
+        takt::Pipe<FailingRecordPayload> pipe("record-stale-guard", 2,
+                                             FailingRecordPayload{});
+        auto failed =
+            takt::recordreplay::make_scoped_record(pipe, failed_path);
+        {
+            auto write = pipe.acquire_write(true);
+            write.value().text = "trigger failure";
+            write.publish();
+        }
+        EXPECT_THROW(failed.reset(), std::runtime_error);
+
+        auto replacement =
+            takt::recordreplay::make_scoped_record(pipe, replacement_path);
+        EXPECT_NO_THROW(failed.reset());
+        EXPECT_THROW(takt::recordreplay::make_scoped_record(pipe, duplicate_path),
+                     std::logic_error);
+        EXPECT_NO_THROW(replacement.reset());
+    }
+
+    std::filesystem::remove(failed_path);
+    std::filesystem::remove(replacement_path);
+    std::filesystem::remove(duplicate_path);
+}
+
+TEST(PipeTests, FailedReplayGuardCannotClearReplacementBinding)
+{
+    register_failing_record_codec();
+    const auto failed_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_stale_guard_failed.bin")
+            .string();
+    const auto replacement_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_stale_guard_replacement.bin")
+            .string();
+    const auto duplicate_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_stale_guard_duplicate.bin")
+            .string();
+    {
+        std::ofstream file(failed_path, std::ios::binary);
+        const char value = 1;
+        file.write(&value, 1);
+    }
+    {
+        std::ofstream file(replacement_path, std::ios::binary);
+        const char value = 2;
+        file.write(&value, 1);
+    }
+    {
+        std::ofstream file(duplicate_path, std::ios::binary);
+        const char value = 3;
+        file.write(&value, 1);
+    }
+
+    {
+        takt::Pipe<FailingRecordPayload> pipe("replay-stale-guard", 2,
+                                             FailingRecordPayload{});
+        auto failed =
+            takt::recordreplay::make_scoped_replay(pipe, failed_path);
+        {
+            auto write = pipe.acquire_write(true);
+            write.value().text = "trigger failure";
+            write.publish();
+        }
+        EXPECT_THROW(pipe.acquire_read(), std::runtime_error);
+        EXPECT_THROW(failed.reset(), std::runtime_error);
+
+        auto replacement =
+            takt::recordreplay::make_scoped_replay(pipe, replacement_path);
+        EXPECT_NO_THROW(failed.reset());
+        EXPECT_THROW(takt::recordreplay::make_scoped_replay(pipe, duplicate_path),
+                     std::logic_error);
+        EXPECT_NO_THROW(replacement.reset());
+    }
+
+    std::filesystem::remove(failed_path);
+    std::filesystem::remove(replacement_path);
+    std::filesystem::remove(duplicate_path);
+}
+
 TEST(PipeTests, ScopedRecordRejectsOverlappingGuards)
 {
     const auto first_path =

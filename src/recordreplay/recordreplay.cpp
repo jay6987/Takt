@@ -1,6 +1,7 @@
 #include "takt/recordreplay/recordreplay.h"
 
 #include <algorithm>
+#include <limits>
 #include <typeindex>
 #include <utility>
 
@@ -13,6 +14,8 @@ struct RecordReplayRegistry::PipeChannel
     std::type_index type;
     std::shared_ptr<std::ofstream> record;
     std::shared_ptr<std::ifstream> replay;
+    std::uint64_t record_generation = 0;
+    std::uint64_t replay_generation = 0;
     std::mutex io_mutex;
 };
 
@@ -29,15 +32,23 @@ void RecordReplayRegistry::register_codec_impl(std::type_index type,
     codecs_[type] = std::move(codec);
 }
 
-void RecordReplayRegistry::set_record_impl(std::type_index type, const void* pipe_id,
-                                           const std::string& file_path)
+std::uint64_t RecordReplayRegistry::set_record_impl(
+    std::type_index type, const void* pipe_id, const std::string& file_path)
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    auto channel = get_or_create_pipe_channel_locked(pipe_id, type);
+    std::shared_ptr<PipeChannel> channel;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        channel = get_or_create_pipe_channel_locked(pipe_id, type);
+    }
+
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
     if (channel->record)
     {
         throw std::logic_error("record stream already active for pipe");
+    }
+    if (channel->record_generation == std::numeric_limits<std::uint64_t>::max())
+    {
+        throw std::overflow_error("record binding generation exhausted");
     }
 
     auto stream = std::make_shared<std::ofstream>(
@@ -47,18 +58,29 @@ void RecordReplayRegistry::set_record_impl(std::type_index type, const void* pip
         throw std::runtime_error("failed to open record file: " + file_path);
     }
 
+    const auto binding_id = channel->record_generation + 1;
     channel->record = std::move(stream);
+    channel->record_generation = binding_id;
+    return binding_id;
 }
 
-void RecordReplayRegistry::set_replay_impl(std::type_index type, const void* pipe_id,
-                                           const std::string& file_path)
+std::uint64_t RecordReplayRegistry::set_replay_impl(
+    std::type_index type, const void* pipe_id, const std::string& file_path)
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    auto channel = get_or_create_pipe_channel_locked(pipe_id, type);
+    std::shared_ptr<PipeChannel> channel;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        channel = get_or_create_pipe_channel_locked(pipe_id, type);
+    }
+
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
     if (channel->replay)
     {
         throw std::logic_error("replay stream already active for pipe");
+    }
+    if (channel->replay_generation == std::numeric_limits<std::uint64_t>::max())
+    {
+        throw std::overflow_error("replay binding generation exhausted");
     }
 
     auto stream = std::make_shared<std::ifstream>(file_path, std::ios::binary);
@@ -67,10 +89,14 @@ void RecordReplayRegistry::set_replay_impl(std::type_index type, const void* pip
         throw std::runtime_error("failed to open replay file: " + file_path);
     }
 
+    const auto binding_id = channel->replay_generation + 1;
     channel->replay = std::move(stream);
+    channel->replay_generation = binding_id;
+    return binding_id;
 }
 
-void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* pipe_id)
+void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* pipe_id,
+                                            std::uint64_t binding_id)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -84,12 +110,12 @@ void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* p
     }
 
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
-    auto stream = channel->record;
-    if (!stream)
+    if (channel->record_generation != binding_id || !channel->record)
     {
         return;
     }
 
+    auto stream = channel->record;
     stream->flush();
     const bool flush_failed = stream->fail();
     stream->close();
@@ -102,7 +128,8 @@ void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* p
     }
 }
 
-void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* pipe_id)
+void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* pipe_id,
+                                            std::uint64_t binding_id)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -116,12 +143,12 @@ void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* p
     }
 
     std::lock_guard<std::mutex> io_lk(channel->io_mutex);
-    auto stream = channel->replay;
-    if (!stream)
+    if (channel->replay_generation != binding_id || !channel->replay)
     {
         return;
     }
 
+    auto stream = channel->replay;
     stream->close();
     const bool close_failed = stream->fail();
     channel->replay.reset();

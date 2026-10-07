@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -41,37 +42,37 @@ class RecordReplayRegistry
                             make_erased_codec<T>(std::move(codec)));
     }
 
-    private:
-        template <typename T> friend class ::takt::recordreplay::ScopedRecord;
-        template <typename T> friend class ::takt::recordreplay::ScopedReplay;
+  private:
+    template <typename T> friend class ::takt::recordreplay::ScopedRecord;
+    template <typename T> friend class ::takt::recordreplay::ScopedReplay;
 
-        template <typename T>
-        void set_record(Pipe<T>& pipe, const std::string& file_path)
+    template <typename T>
+    std::uint64_t set_record(Pipe<T>& pipe, const std::string& file_path)
     {
         static_cast<void>(resolve_codec_for_type<T>());
-        set_record_impl(std::type_index(typeid(T)), &pipe, file_path);
+        return set_record_impl(std::type_index(typeid(T)), &pipe, file_path);
     }
 
     template <typename T>
-    void set_replay(Pipe<T>& pipe, const std::string& file_path)
+    std::uint64_t set_replay(Pipe<T>& pipe, const std::string& file_path)
     {
         static_cast<void>(resolve_codec_for_type<T>());
-        set_replay_impl(std::type_index(typeid(T)), &pipe, file_path);
+        return set_replay_impl(std::type_index(typeid(T)), &pipe, file_path);
     }
 
     template <typename T>
-    void clear_record(Pipe<T>& pipe)
+    void clear_record(Pipe<T>& pipe, std::uint64_t binding_id)
     {
-        clear_record_impl(std::type_index(typeid(T)), &pipe);
+        clear_record_impl(std::type_index(typeid(T)), &pipe, binding_id);
     }
 
     template <typename T>
-    void clear_replay(Pipe<T>& pipe)
+    void clear_replay(Pipe<T>& pipe, std::uint64_t binding_id)
     {
-        clear_replay_impl(std::type_index(typeid(T)), &pipe);
+        clear_replay_impl(std::type_index(typeid(T)), &pipe, binding_id);
     }
 
-    public:
+  public:
     template <typename T>
     void try_record_slots(Pipe<T>& pipe, const std::vector<size_t>& slots,
                           const std::vector<T>& baskets) noexcept
@@ -149,12 +150,14 @@ class RecordReplayRegistry
     }
 
     void register_codec_impl(std::type_index type, TypeErasedCodec codec);
-    void set_record_impl(std::type_index type, const void* pipe_id,
-                         const std::string& file_path);
-    void set_replay_impl(std::type_index type, const void* pipe_id,
-                         const std::string& file_path);
-    void clear_record_impl(std::type_index type, const void* pipe_id);
-    void clear_replay_impl(std::type_index type, const void* pipe_id);
+    std::uint64_t set_record_impl(std::type_index type, const void* pipe_id,
+                                  const std::string& file_path);
+    std::uint64_t set_replay_impl(std::type_index type, const void* pipe_id,
+                                  const std::string& file_path);
+    void clear_record_impl(std::type_index type, const void* pipe_id,
+                           std::uint64_t binding_id);
+    void clear_replay_impl(std::type_index type, const void* pipe_id,
+                           std::uint64_t binding_id);
     std::optional<TypeErasedCodec> find_codec_impl(std::type_index type) const;
     void try_record_slots_impl(std::type_index type, const void* pipe_id,
                                const std::vector<size_t>& slots, const void* baskets,
@@ -181,9 +184,11 @@ template <typename T> class ScopedRecord
 {
   public:
     ScopedRecord(Pipe<T>& pipe, std::string file_path)
-        : pipe_(&pipe), active_(true)
+        : pipe_(&pipe),
+          binding_id_(detail::RecordReplayRegistry::instance().set_record(
+              *pipe_, file_path)),
+          active_(true)
     {
-        detail::RecordReplayRegistry::instance().set_record(*pipe_, file_path);
     }
 
     ~ScopedRecord() noexcept
@@ -203,7 +208,8 @@ template <typename T> class ScopedRecord
     ScopedRecord& operator=(const ScopedRecord&) = delete;
 
     ScopedRecord(ScopedRecord&& rhs) noexcept
-        : pipe_(std::exchange(rhs.pipe_, nullptr)), active_(rhs.active_)
+                : pipe_(std::exchange(rhs.pipe_, nullptr)),
+                    binding_id_(std::exchange(rhs.binding_id_, 0)), active_(rhs.active_)
     {
         rhs.active_ = false;
     }
@@ -217,6 +223,7 @@ template <typename T> class ScopedRecord
 
         reset();
         pipe_ = std::exchange(rhs.pipe_, nullptr);
+        binding_id_ = std::exchange(rhs.binding_id_, 0);
         active_ = rhs.active_;
         rhs.active_ = false;
         return *this;
@@ -229,8 +236,9 @@ template <typename T> class ScopedRecord
             return;
         }
 
-        detail::RecordReplayRegistry::instance().clear_record(*pipe_);
+        detail::RecordReplayRegistry::instance().clear_record(*pipe_, binding_id_);
         pipe_ = nullptr;
+        binding_id_ = 0;
         active_ = false;
     }
 
@@ -241,6 +249,7 @@ template <typename T> class ScopedRecord
 
   private:
     Pipe<T>* pipe_ = nullptr;
+        std::uint64_t binding_id_ = 0;
     bool active_ = false;
 };
 
@@ -248,9 +257,11 @@ template <typename T> class ScopedReplay
 {
   public:
     ScopedReplay(Pipe<T>& pipe, std::string file_path)
-        : pipe_(&pipe), active_(true)
+        : pipe_(&pipe),
+          binding_id_(detail::RecordReplayRegistry::instance().set_replay(
+              *pipe_, file_path)),
+          active_(true)
     {
-        detail::RecordReplayRegistry::instance().set_replay(*pipe_, file_path);
     }
 
     ~ScopedReplay() noexcept
@@ -270,7 +281,8 @@ template <typename T> class ScopedReplay
     ScopedReplay& operator=(const ScopedReplay&) = delete;
 
     ScopedReplay(ScopedReplay&& rhs) noexcept
-        : pipe_(std::exchange(rhs.pipe_, nullptr)), active_(rhs.active_)
+                : pipe_(std::exchange(rhs.pipe_, nullptr)),
+                    binding_id_(std::exchange(rhs.binding_id_, 0)), active_(rhs.active_)
     {
         rhs.active_ = false;
     }
@@ -284,6 +296,7 @@ template <typename T> class ScopedReplay
 
         reset();
         pipe_ = std::exchange(rhs.pipe_, nullptr);
+        binding_id_ = std::exchange(rhs.binding_id_, 0);
         active_ = rhs.active_;
         rhs.active_ = false;
         return *this;
@@ -296,8 +309,9 @@ template <typename T> class ScopedReplay
             return;
         }
 
-        detail::RecordReplayRegistry::instance().clear_replay(*pipe_);
+        detail::RecordReplayRegistry::instance().clear_replay(*pipe_, binding_id_);
         pipe_ = nullptr;
+        binding_id_ = 0;
         active_ = false;
     }
 
@@ -308,6 +322,7 @@ template <typename T> class ScopedReplay
 
   private:
     Pipe<T>* pipe_ = nullptr;
+        std::uint64_t binding_id_ = 0;
     bool active_ = false;
 };
 
