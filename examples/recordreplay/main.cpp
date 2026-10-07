@@ -13,7 +13,8 @@ int main()
         // Phase 1: attach record behavior to this pipe.
         // For trivially copyable payloads like int, no custom codec is required.
         takt::Pipe<int> record_pipe("record-int", 8, 0);
-        takt::recordreplay::set_record(record_pipe, file_path);
+        auto record =
+            takt::recordreplay::make_scoped_record(record_pipe, file_path);
 
         // Write one batch into the pipe. Recording happens when the published write
         // token is released.
@@ -28,7 +29,8 @@ int main()
     {
         // Phase 2: attach replay behavior to a new pipe reading from the same file.
         takt::Pipe<int> replay_pipe("replay-int", 8, 0);
-        takt::recordreplay::set_replay(replay_pipe, file_path);
+        auto replay =
+            takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
 
         // Reserve target slots by writing placeholders.
         // The subsequent read path replays persisted data into these slots before
