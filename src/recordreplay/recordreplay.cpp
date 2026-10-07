@@ -32,31 +32,41 @@ void RecordReplayRegistry::register_codec_impl(std::type_index type,
 void RecordReplayRegistry::set_record_impl(std::type_index type, const void* pipe_id,
                                            const std::string& file_path)
 {
-    auto stream =
-        std::make_shared<std::ofstream>(file_path, std::ios::binary | std::ios::trunc);
+    std::lock_guard<std::mutex> lk(mutex_);
+    auto channel = get_or_create_pipe_channel_locked(pipe_id, type);
+    std::lock_guard<std::mutex> io_lk(channel->io_mutex);
+    if (channel->record)
+    {
+        throw std::logic_error("record stream already active for pipe");
+    }
+
+    auto stream = std::make_shared<std::ofstream>(
+        file_path, std::ios::binary | std::ios::trunc);
     if (!stream->is_open())
     {
         throw std::runtime_error("failed to open record file: " + file_path);
     }
 
-    std::lock_guard<std::mutex> lk(mutex_);
-    auto channel = get_or_create_pipe_channel_locked(pipe_id, type);
-    std::lock_guard<std::mutex> io_lk(channel->io_mutex);
     channel->record = std::move(stream);
 }
 
 void RecordReplayRegistry::set_replay_impl(std::type_index type, const void* pipe_id,
                                            const std::string& file_path)
 {
+    std::lock_guard<std::mutex> lk(mutex_);
+    auto channel = get_or_create_pipe_channel_locked(pipe_id, type);
+    std::lock_guard<std::mutex> io_lk(channel->io_mutex);
+    if (channel->replay)
+    {
+        throw std::logic_error("replay stream already active for pipe");
+    }
+
     auto stream = std::make_shared<std::ifstream>(file_path, std::ios::binary);
     if (!stream->is_open())
     {
         throw std::runtime_error("failed to open replay file: " + file_path);
     }
 
-    std::lock_guard<std::mutex> lk(mutex_);
-    auto channel = get_or_create_pipe_channel_locked(pipe_id, type);
-    std::lock_guard<std::mutex> io_lk(channel->io_mutex);
     channel->replay = std::move(stream);
 }
 
@@ -144,7 +154,7 @@ void RecordReplayRegistry::try_record_slots_impl(
         {
             std::lock_guard<std::mutex> lk(mutex_);
             auto it = pipes_.find(pipe_id);
-            if (it == pipes_.end() || it->second->type != type || !it->second->record)
+            if (it == pipes_.end() || it->second->type != type)
             {
                 return;
             }
@@ -179,7 +189,7 @@ void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* p
     {
         std::lock_guard<std::mutex> lk(mutex_);
         auto it = pipes_.find(pipe_id);
-        if (it == pipes_.end() || it->second->type != type || !it->second->replay)
+        if (it == pipes_.end() || it->second->type != type)
         {
             return;
         }

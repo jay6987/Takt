@@ -37,6 +37,8 @@ auto r = replay_pipe.acquire_read_batch(3, 0);
 The scoped guard must outlive the record/replay phase, and the pipe must outlive
 the guard. Destruction detaches the stream without throwing. Call `reset()` when
 you need to observe flush or close failures; an error is reported as an exception.
+Do not overlap multiple record guards or multiple replay guards for the same
+pipe; each direction has a single registry slot, and a second binding is rejected.
 
 ## Non-trivial Types
 

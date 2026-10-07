@@ -25,6 +25,16 @@ struct FailingRecordPayload
 {
     std::string text;
 };
+
+void register_failing_record_codec()
+{
+    takt::recordreplay::PipeCodec<FailingRecordPayload> codec;
+    codec.record_one = [](std::ostream& stream, const FailingRecordPayload&)
+    { stream.setstate(std::ios::badbit); };
+    codec.replay_one = [](std::istream& stream, FailingRecordPayload&)
+    { stream.setstate(std::ios::badbit); };
+    takt::recordreplay::register_codec<FailingRecordPayload>(std::move(codec));
+}
 } // namespace
 
 TEST(PipeTests, SingleElementReadWrite)
@@ -276,11 +286,7 @@ TEST(PipeTests, ExternalRecordReplayRequiresCodecForNonTrivialType)
 
 TEST(PipeTests, ScopedRecordResetReportsStreamFailure)
 {
-    takt::recordreplay::PipeCodec<FailingRecordPayload> codec;
-    codec.record_one = [](std::ostream& stream, const FailingRecordPayload&)
-    { stream.setstate(std::ios::badbit); };
-    codec.replay_one = [](std::istream&, FailingRecordPayload&) {};
-    takt::recordreplay::register_codec<FailingRecordPayload>(std::move(codec));
+    register_failing_record_codec();
 
     const auto file_path =
         (std::filesystem::temp_directory_path() / "takt_record_replay_failed_reset.bin")
@@ -300,6 +306,217 @@ TEST(PipeTests, ScopedRecordResetReportsStreamFailure)
     EXPECT_NO_THROW(record.reset());
     EXPECT_FALSE(record.active());
     std::filesystem::remove(file_path);
+}
+
+TEST(PipeTests, ScopedRecordRejectsOverlappingGuards)
+{
+    const auto first_path =
+        (std::filesystem::temp_directory_path() / "takt_record_overlap_first.bin")
+            .string();
+    const auto second_path =
+        (std::filesystem::temp_directory_path() / "takt_record_overlap_second.bin")
+            .string();
+    takt::Pipe<int> pipe("record-overlap", 2, 0);
+    auto record = takt::recordreplay::make_scoped_record(pipe, first_path);
+
+    EXPECT_THROW(takt::recordreplay::make_scoped_record(pipe, second_path),
+                 std::logic_error);
+    EXPECT_TRUE(record.active());
+    EXPECT_NO_THROW(record.reset());
+    std::filesystem::remove(first_path);
+    std::filesystem::remove(second_path);
+}
+
+TEST(PipeTests, ScopedReplayRejectsOverlappingGuards)
+{
+    const auto first_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_overlap_first.bin")
+            .string();
+    const auto second_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_overlap_second.bin")
+            .string();
+    {
+        std::ofstream first_file(first_path, std::ios::binary);
+        std::ofstream second_file(second_path, std::ios::binary);
+    }
+
+    takt::Pipe<int> pipe("replay-overlap", 2, 0);
+    auto replay = takt::recordreplay::make_scoped_replay(pipe, first_path);
+
+    EXPECT_THROW(takt::recordreplay::make_scoped_replay(pipe, second_path),
+                 std::logic_error);
+    EXPECT_TRUE(replay.active());
+    EXPECT_NO_THROW(replay.reset());
+    std::filesystem::remove(first_path);
+    std::filesystem::remove(second_path);
+}
+
+TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
+{
+    const auto old_path =
+        (std::filesystem::temp_directory_path() / "takt_record_move_assign_old.bin")
+            .string();
+    const auto source_path =
+        (std::filesystem::temp_directory_path() / "takt_record_move_assign_source.bin")
+            .string();
+
+    {
+        takt::Pipe<int> target_pipe("record-move-target", 2, 0);
+        takt::Pipe<int> source_pipe("record-move-source", 2, 0);
+        auto target = takt::recordreplay::make_scoped_record(target_pipe, old_path);
+        auto source =
+            takt::recordreplay::make_scoped_record(source_pipe, source_path);
+
+        target = std::move(source);
+        EXPECT_TRUE(target.active());
+        EXPECT_FALSE(source.active());
+
+        {
+            auto write = source_pipe.acquire_write(true);
+            write.value() = 314;
+            write.publish();
+        }
+        EXPECT_NO_THROW(target.reset());
+
+        takt::Pipe<int> replay_pipe("record-move-verify", 2, 0);
+        auto replay =
+            takt::recordreplay::make_scoped_replay(replay_pipe, source_path);
+        {
+            auto seed = replay_pipe.acquire_write(true);
+            seed.value() = -1;
+            seed.publish();
+        }
+        auto read = replay_pipe.acquire_read();
+        EXPECT_EQ(read.value(), 314);
+    }
+
+    std::filesystem::remove(old_path);
+    std::filesystem::remove(source_path);
+}
+
+TEST(PipeTests, ScopedReplayMoveAssignmentTransfersBinding)
+{
+    const auto old_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_old.bin")
+            .string();
+    const auto source_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_source.bin")
+            .string();
+    {
+        std::ofstream old_file(old_path, std::ios::binary);
+        std::ofstream source_file(source_path, std::ios::binary);
+        const int old_value = 1;
+        const int source_value = 2718;
+        old_file.write(reinterpret_cast<const char*>(&old_value), sizeof(old_value));
+        source_file.write(reinterpret_cast<const char*>(&source_value),
+                           sizeof(source_value));
+    }
+
+    {
+        takt::Pipe<int> target_pipe("replay-move-target", 2, 0);
+        takt::Pipe<int> source_pipe("replay-move-source", 2, 0);
+        auto target = takt::recordreplay::make_scoped_replay(target_pipe, old_path);
+        auto source =
+            takt::recordreplay::make_scoped_replay(source_pipe, source_path);
+
+        target = std::move(source);
+        EXPECT_TRUE(target.active());
+        EXPECT_FALSE(source.active());
+
+        {
+            auto seed = source_pipe.acquire_write(true);
+            seed.value() = -1;
+            seed.publish();
+        }
+        auto read = source_pipe.acquire_read();
+        EXPECT_EQ(read.value(), 2718);
+        EXPECT_NO_THROW(target.reset());
+    }
+
+    std::filesystem::remove(old_path);
+    std::filesystem::remove(source_path);
+}
+
+TEST(PipeTests, ScopedRecordMoveAssignmentFailurePreservesSource)
+{
+    register_failing_record_codec();
+    const auto target_path =
+        (std::filesystem::temp_directory_path() / "takt_record_move_assign_failure.bin")
+            .string();
+    const auto source_path =
+        (std::filesystem::temp_directory_path() / "takt_record_move_assign_source.bin")
+            .string();
+
+    {
+        takt::Pipe<FailingRecordPayload> target_pipe("record-move-failure-target", 2,
+                                                     FailingRecordPayload{});
+        takt::Pipe<FailingRecordPayload> source_pipe("record-move-failure-source", 2,
+                                                     FailingRecordPayload{});
+        auto target =
+            takt::recordreplay::make_scoped_record(target_pipe, target_path);
+        auto source =
+            takt::recordreplay::make_scoped_record(source_pipe, source_path);
+
+        {
+            auto write = target_pipe.acquire_write(true);
+            write.value().text = "fail target cleanup";
+            write.publish();
+        }
+
+        EXPECT_THROW(target = std::move(source), std::runtime_error);
+        EXPECT_TRUE(target.active());
+        EXPECT_TRUE(source.active());
+        EXPECT_NO_THROW(target.reset());
+        EXPECT_NO_THROW(source.reset());
+    }
+
+    std::filesystem::remove(target_path);
+    std::filesystem::remove(source_path);
+}
+
+TEST(PipeTests, ScopedReplayMoveAssignmentFailurePreservesSource)
+{
+    register_failing_record_codec();
+    const auto target_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_failure.bin")
+            .string();
+    const auto source_path =
+        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_source.bin")
+            .string();
+    {
+        std::ofstream target_file(target_path, std::ios::binary);
+        std::ofstream source_file(source_path, std::ios::binary);
+        const char byte = 1;
+        target_file.write(&byte, 1);
+        source_file.write(&byte, 1);
+    }
+
+    {
+        takt::Pipe<FailingRecordPayload> target_pipe("replay-move-failure-target", 2,
+                                                     FailingRecordPayload{});
+        takt::Pipe<FailingRecordPayload> source_pipe("replay-move-failure-source", 2,
+                                                     FailingRecordPayload{});
+        auto target =
+            takt::recordreplay::make_scoped_replay(target_pipe, target_path);
+        auto source =
+            takt::recordreplay::make_scoped_replay(source_pipe, source_path);
+
+        {
+            auto write = target_pipe.acquire_write(true);
+            write.value().text = "trigger replay failure";
+            write.publish();
+        }
+        EXPECT_THROW(target_pipe.acquire_read(), std::runtime_error);
+
+        EXPECT_THROW(target = std::move(source), std::runtime_error);
+        EXPECT_TRUE(target.active());
+        EXPECT_TRUE(source.active());
+        EXPECT_NO_THROW(target.reset());
+        EXPECT_NO_THROW(source.reset());
+    }
+
+    std::filesystem::remove(target_path);
+    std::filesystem::remove(source_path);
 }
 
 TEST(PipeTests, ScopedRecordAndReplayAreMoveOnly)
