@@ -4,7 +4,7 @@
 
 The project currently supports security fixes for the latest development line only.
 
-- `main`: supported
+- `master`: supported
 - Older tags/releases: best effort
 
 ## Reporting a Vulnerability

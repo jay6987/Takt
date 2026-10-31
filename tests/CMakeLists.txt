@@ -25,6 +25,19 @@ target_link_libraries(takt_smoke_test
 
 gtest_discover_tests(takt_smoke_test)
 
+add_test(
+    NAME TaktInstallPackageSmoke
+    COMMAND ${CMAKE_COMMAND}
+        "-DBUILD_DIR=${PROJECT_BINARY_DIR}"
+        "-DTEST_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/package_consumer"
+        "-DTEST_BINARY_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-consumer-smoke"
+        "-DCONFIGURATION=$<CONFIG>"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+        "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/install_package_smoke.cmake"
+)
+
 set(_takt_try_compile_target_type_was_defined FALSE)
 if(DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
     set(_takt_try_compile_target_type_was_defined TRUE)

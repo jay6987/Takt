@@ -3,14 +3,15 @@
 Takt is a data-driven pipeline library inspired by takt time in lean manufacturing.
 
 Current implementation status:
-- New root-level open-source layout is initialized.
-- Public API namespace is `takt`.
+- C++17 pipeline library with public API namespace `takt`.
 - Logger extension point is available via `takt::ILogger` and `takt::set_logger()`.
 - Native pipeline headers are available under `include/takt/pipeline/`.
 - Official node worker base is `Node`.
 - `Pipe<T>` supports fixed-capacity preallocation, blocking backpressure, batch read/write tokens, and overlap-window reads.
 - Node execution is task-driven with a built-in ingress manager and worker pool: users implement `build_task(sequence_id)` and `process_task(worker_index, task)`.
 - Structured exception context is available through `NodeExceptionContext` and default logs include stage/pipe/worker metadata.
+- Record/replay bindings use move-only scoped guards with checked explicit cleanup.
+- CTest covers pipeline behavior, record/replay cleanup, concurrency, and package installation.
 
 ## Documentation
 
@@ -33,10 +34,29 @@ Current implementation status:
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Changelog](CHANGELOG.md)
 
-## Quick Start (CMake add_subdirectory)
+## Quick Start
+
+### CMake add_subdirectory
 
 ```cmake
 add_subdirectory(path/to/Takt)
+target_link_libraries(your_target PRIVATE takt::takt)
+```
+
+### Installed CMake package
+
+Install Takt from a checkout:
+
+```bash
+cmake -S path/to/Takt -B build
+cmake --build build --parallel
+cmake --install build --prefix /path/to/install
+```
+
+Then find and link the exported target from another CMake project:
+
+```cmake
+find_package(Takt 0.2 CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE takt::takt)
 ```
 
@@ -97,9 +117,7 @@ takt::set_logger(std::make_shared<MyLogger>());
 
 ## Roadmap
 
-1. Extend test matrix from smoke test to multi-case CTest suite (deadlock, closure propagation, throughput stress, exception fan-out).
-2. Add install/export package support for `find_package(Takt)` workflow.
-3. Add benchmark suite for throughput and latency profiling across representative workloads.
+1. Add benchmark suite for throughput and latency profiling across representative workloads.
 
 ## License
 
