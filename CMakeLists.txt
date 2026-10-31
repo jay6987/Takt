@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(Takt VERSION 0.1.0 LANGUAGES CXX)
+project(Takt VERSION 0.2.0 LANGUAGES CXX)
 
 option(TAKT_BUILD_EXAMPLES "Build Takt examples" ON)
 option(TAKT_BUILD_TESTS "Build Takt tests" ON)
