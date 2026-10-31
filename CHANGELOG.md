@@ -6,7 +6,7 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
-## [0.2.0] - TBD
+## [0.2.0] - 2026-10-31
 
 ### Added
 - Move-only `ScopedRecord<T>` and `ScopedReplay<T>` guards with explicit `reset()` support.
