@@ -15,6 +15,7 @@ add_executable(takt_smoke_test
     pipeline_builder_tests.cpp
     pipe_tests.cpp
     node_tests.cpp
+    pipeline_contract_tests.cpp
 )
 
 target_link_libraries(takt_smoke_test
@@ -25,6 +26,10 @@ target_link_libraries(takt_smoke_test
 
 gtest_discover_tests(takt_smoke_test)
 
+get_directory_property(_takt_compile_options COMPILE_OPTIONS)
+get_directory_property(_takt_link_options LINK_OPTIONS)
+string(JOIN " " _takt_compile_flags ${_takt_compile_options})
+string(JOIN " " _takt_link_flags ${_takt_link_options})
 add_test(
     NAME TaktInstallPackageSmoke
     COMMAND ${CMAKE_COMMAND}
@@ -35,6 +40,9 @@ add_test(
         "-DGENERATOR=${CMAKE_GENERATOR}"
         "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
         "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCXX_FLAGS=${CMAKE_CXX_FLAGS} ${_takt_compile_flags}"
+        "-DEXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS} ${_takt_link_flags}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/install_package_smoke.cmake"
 )
 

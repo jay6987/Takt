@@ -64,17 +64,39 @@ void SubgraphNode::start()
 
 void SubgraphNode::join()
 {
-    runtime_->join();
+    std::exception_ptr failure;
+    try
+    {
+        runtime_->join();
+    }
+    catch (...)
+    {
+        failure = std::current_exception();
+    }
 
     for (auto& worker : bridge_workers_)
     {
         if (worker.valid())
         {
-            worker.get();
+            try
+            {
+                worker.get();
+            }
+            catch (...)
+            {
+                if (!failure)
+                {
+                    failure = std::current_exception();
+                }
+            }
         }
     }
     bridge_workers_.clear();
 
+    if (failure)
+    {
+        std::rethrow_exception(failure);
+    }
     std::lock_guard<std::mutex> lk(bridge_error_mutex_);
     if (has_bridge_error_)
     {
@@ -113,8 +135,7 @@ void SubgraphNode::run_bridge(size_t index)
     {
         try
         {
-            auto packet = link.source->read();
-            link.target->write(packet);
+            link.source->transfer_to(*link.target);
         }
         catch (const PipeClosedAndEmptySignal&)
         {
@@ -136,7 +157,8 @@ void SubgraphNode::run_bridge(size_t index)
                 }
             }
             error(message);
-            link.target->close();
+            link.source->close_with_error(message);
+            link.target->close_with_error(message);
             break;
         }
         catch (...)
@@ -155,7 +177,8 @@ void SubgraphNode::run_bridge(size_t index)
                 }
             }
             error(message);
-            link.target->close();
+            link.source->close_with_error(message);
+            link.target->close_with_error(message);
             break;
         }
     }

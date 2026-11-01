@@ -42,8 +42,9 @@ bool PipeCore::faulted() const noexcept
     return write_failure_;
 }
 
-const std::string& PipeCore::fault_message() const noexcept
+std::string PipeCore::fault_message() const
 {
+    std::lock_guard<std::mutex> lk(mutex_);
     return fault_message_;
 }
 
@@ -51,6 +52,24 @@ void PipeCore::close()
 {
     std::lock_guard<std::mutex> lk(mutex_);
     closed_ = true;
+    seal_visible_tail_locked();
+    cv_.notify_all();
+}
+
+void PipeCore::close_with_error(std::string message)
+{
+    if (message.empty())
+    {
+        throw std::invalid_argument("pipe error message cannot be empty");
+    }
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!write_failure_)
+    {
+        fault_message_ = std::move(message);
+        write_failure_ = true;
+    }
+    closed_ = true;
+    seal_visible_tail_locked();
     cv_.notify_all();
 }
 
@@ -141,11 +160,11 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
 
     auto calc_read_end = [this](size_t start_pos, size_t wanted_size) -> size_t
     {
-        if (committed_segment_ends_.empty())
+        const size_t segment_end = next_segment_end_locked();
+        if (segment_end == 0)
         {
             return start_pos;
         }
-        const size_t segment_end = committed_segment_ends_.front();
         return std::min(start_pos + wanted_size, segment_end);
     };
 
@@ -154,12 +173,11 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
         lk,
         [this, read_size, overlap_size, stride, &calc_read_end]
         {
-            if (closed_ && committed_segment_ends_.empty() &&
-                read_reserve_pos_ >= write_visible_pos_)
+            if (closed_ && pending_writes_.empty())
             {
                 return true;
             }
-            if (committed_segment_ends_.empty())
+            if (next_segment_end_locked() == 0)
             {
                 return false;
             }
@@ -172,8 +190,7 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
             const size_t actual_read_size = read_end - read_start;
             const size_t actual_overlap = read_reserve_pos_ - read_start;
             const size_t actual_stride = actual_read_size - actual_overlap;
-            const bool hit_segment_end = (!committed_segment_ends_.empty() &&
-                                          read_end == committed_segment_ends_.front());
+            const bool hit_segment_end = read_end == next_segment_end_locked();
 
             // If this window reaches the committed segment end, return what is
             // available instead of waiting for the next segment to complete.
@@ -181,9 +198,9 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
                    (closed_ && actual_stride > 0);
         });
 
-    if (committed_segment_ends_.empty())
+    if (next_segment_end_locked() == 0)
     {
-        throw PipeClosedAndEmptySignal();
+        throw_terminal_locked();
     }
 
     const size_t read_start = std::max(
@@ -196,7 +213,7 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
 
     if (actual_stride == 0)
     {
-        throw PipeClosedAndEmptySignal();
+        throw_terminal_locked();
     }
 
     PipeCoreReadBatch batch;
@@ -206,8 +223,7 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
     batch.overlap_size = actual_overlap;
     batch.stride = actual_stride;
     batch.is_segment_start = (read_start == read_segment_start_pos_);
-    batch.is_segment_end = (!committed_segment_ends_.empty() &&
-                            read_end == committed_segment_ends_.front());
+    batch.is_segment_end = read_end == next_segment_end_locked();
     batch.slots.reserve(actual_stride);
 
     for (size_t i = 0; i < actual_stride; ++i)
@@ -248,6 +264,10 @@ void PipeCore::flush_released_writes_locked()
         const auto token = pending_writes_.front();
         pending_writes_.pop_front();
 
+        if (publication_blocked_)
+        {
+            continue;
+        }
         if (token.published)
         {
             write_visible_pos_ += token.size;
@@ -258,16 +278,49 @@ void PipeCore::flush_released_writes_locked()
         }
         else
         {
-            write_failure_ = true;
+            publication_blocked_ = true;
             closed_ = true;
-            fault_message_ =
-                "pipe '" + name_ +
-                "' faulted because write token starting at logical position " +
-                std::to_string(token.start_pos) + " with size " +
-                std::to_string(token.size) + " was released without publish";
-            return;
+            if (!write_failure_)
+            {
+                write_failure_ = true;
+                fault_message_ =
+                    "pipe '" + name_ +
+                    "' faulted because write token starting at logical position " +
+                    std::to_string(token.start_pos) + " with size " +
+                    std::to_string(token.size) + " was released without publish";
+            }
         }
     }
+    if (closed_)
+    {
+        seal_visible_tail_locked();
+    }
+}
+
+void PipeCore::seal_visible_tail_locked()
+{
+    if (write_visible_pos_ > read_release_pos_ &&
+        (committed_segment_ends_.empty() ||
+         committed_segment_ends_.back() < write_visible_pos_))
+    {
+        committed_segment_ends_.push_back(write_visible_pos_);
+    }
+}
+
+void PipeCore::throw_terminal_locked() const
+{
+    if (write_failure_)
+    {
+        throw PipeFaultedError(fault_message_);
+    }
+    throw PipeClosedAndEmptySignal();
+}
+
+size_t PipeCore::next_segment_end_locked() const
+{
+    const auto end = std::upper_bound(committed_segment_ends_.begin(),
+                                      committed_segment_ends_.end(), read_reserve_pos_);
+    return end == committed_segment_ends_.end() ? 0 : *end;
 }
 
 void PipeCore::flush_released_reads_locked()

@@ -210,7 +210,8 @@ RecordReplayRegistry::find_codec_impl(std::type_index type) const
 
 void RecordReplayRegistry::try_record_slots_impl(
     std::type_index type, const void* pipe_id, const std::vector<size_t>& slots,
-    const void* baskets, size_t basket_size, const TypeErasedCodec& codec) noexcept
+    const void* baskets, size_t basket_size,
+    const std::function<TypeErasedCodec()>& resolve_codec) noexcept
 {
     try
     {
@@ -231,6 +232,7 @@ void RecordReplayRegistry::try_record_slots_impl(
             return;
         }
 
+        const auto codec = resolve_codec();
         const auto* basket_bytes = static_cast<const char*>(baskets);
         for (size_t slot : slots)
         {
@@ -247,7 +249,7 @@ void RecordReplayRegistry::try_record_slots_impl(
 void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* pipe_id,
                                              const std::vector<size_t>& slots,
                                              void* baskets, size_t basket_size,
-                                             const TypeErasedCodec& codec)
+                                             const std::function<TypeErasedCodec()>& resolve_codec)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -266,6 +268,7 @@ void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* p
         return;
     }
 
+    const auto codec = resolve_codec();
     auto* basket_bytes = static_cast<char*>(baskets);
     for (size_t slot : slots)
     {

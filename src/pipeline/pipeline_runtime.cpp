@@ -26,9 +26,28 @@ void PipelineRuntime::start()
 
 void PipelineRuntime::join()
 {
+    std::exception_ptr failure;
     for (auto& node : nodes_)
     {
-        node->join();
+        try
+        {
+            node->join();
+            if (!failure)
+            {
+                failure = node->failure();
+            }
+        }
+        catch (...)
+        {
+            if (!failure)
+            {
+                failure = std::current_exception();
+            }
+        }
+    }
+    if (failure)
+    {
+        std::rethrow_exception(failure);
     }
 }
 

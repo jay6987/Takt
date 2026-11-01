@@ -65,8 +65,9 @@ class PipeCore
     size_t size() const noexcept;
     bool closed() const noexcept;
     bool faulted() const noexcept;
-    const std::string& fault_message() const noexcept;
+    std::string fault_message() const;
     void close();
+    void close_with_error(std::string message);
 
     PipeCoreWriteBatch acquire_write_batch(size_t count, bool is_segment_end);
     void release_write_batch(size_t token_id, bool published);
@@ -99,6 +100,9 @@ class PipeCore
     size_t position_to_slot(size_t absolute_pos) const noexcept;
     void flush_released_writes_locked();
     void flush_released_reads_locked();
+    void seal_visible_tail_locked();
+    [[noreturn]] void throw_terminal_locked() const;
+    size_t next_segment_end_locked() const;
     PendingWrite& find_write_locked(size_t token_id);
     PendingRead& find_read_locked(size_t token_id);
 
@@ -121,6 +125,7 @@ class PipeCore
     std::deque<PendingWrite> pending_writes_;
     std::deque<PendingRead> pending_reads_;
     bool write_failure_ = false;
+    bool publication_blocked_ = false;
     std::string fault_message_;
     bool closed_ = false;
 };

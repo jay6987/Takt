@@ -2,6 +2,18 @@
 
 `PipelineBuilder::bind_subgraph` lets you compose an inner pipeline as a node in an outer graph.
 
+Compatible typed endpoints now transfer using `transfer_to`: the bridge retains
+both tokens and swaps basket storage. For `std::vector<float>`/`double`, this
+exchanges preallocated buffers without copying image pixels through `std::any`.
+Buffer identity can move between pipes; do not cache a basket's vector data
+pointer beyond its token lifetime. Use equal fixed image shapes on both sides,
+and disable read-history snapshots for non-overlap image streams.
+
+Explicit endpoint `read()`/`write()` still provide the legacy copied packet API.
+Custom endpoint implementations must implement `close_with_error(message)`.
+Bridge errors close both affected endpoints with an error, waking upstream
+writers and propagating failure downstream after successful data drains.
+
 ## Mapping Pattern
 
 ```cpp

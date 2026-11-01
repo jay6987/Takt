@@ -79,9 +79,9 @@ class RecordReplayRegistry
     {
         try
         {
-            const auto codec = resolve_codec_for_type<T>();
             try_record_slots_impl(std::type_index(typeid(T)), &pipe, slots,
-                                  baskets.data(), sizeof(T), codec);
+                                  baskets.data(), sizeof(T),
+                                  [this] { return resolve_codec_for_type<T>(); });
         }
         catch (...)
         {
@@ -94,9 +94,8 @@ class RecordReplayRegistry
     void replay_slots(Pipe<T>& pipe, const std::vector<size_t>& slots,
                       std::vector<T>& baskets)
     {
-        const auto codec = resolve_codec_for_type<T>();
         replay_slots_impl(std::type_index(typeid(T)), &pipe, slots, baskets.data(),
-                          sizeof(T), codec);
+                          sizeof(T), [this] { return resolve_codec_for_type<T>(); });
     }
 
   private:
@@ -162,10 +161,11 @@ class RecordReplayRegistry
     void try_record_slots_impl(std::type_index type, const void* pipe_id,
                                const std::vector<size_t>& slots, const void* baskets,
                                size_t basket_size,
-                               const TypeErasedCodec& codec) noexcept;
+                               const std::function<TypeErasedCodec()>& resolve_codec) noexcept;
     void replay_slots_impl(std::type_index type, const void* pipe_id,
                            const std::vector<size_t>& slots, void* baskets,
-                           size_t basket_size, const TypeErasedCodec& codec);
+                           size_t basket_size,
+                           const std::function<TypeErasedCodec()>& resolve_codec);
     std::shared_ptr<PipeChannel>
     get_or_create_pipe_channel_locked(const void* pipe_id, std::type_index type);
 

@@ -737,7 +737,7 @@ TEST(PipeTests, LaterPublishedWriteDoesNotBypassEarlierUnpublishedWrite)
         second.publish();
     }
 
-    EXPECT_THROW(pipe.acquire_read(), takt::PipeClosedAndEmptySignal);
+    EXPECT_THROW(pipe.acquire_read(), takt::PipeFaultedError);
     EXPECT_TRUE(pipe.closed());
     EXPECT_TRUE(pipe.faulted());
     EXPECT_FALSE(pipe.fault_message().empty());

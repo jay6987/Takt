@@ -10,6 +10,12 @@
 
 namespace takt
 {
+enum class ReadHistoryPolicy
+{
+    Snapshot,
+    Disabled,
+};
+
 template <typename T> class Pipe
 {
   public:
@@ -19,9 +25,10 @@ template <typename T> class Pipe
     class ReadBatchToken;
 
     Pipe(std::string name, size_t capacity, const T& basket_template = T(),
-         PipeDescriptor descriptor = {})
+         PipeDescriptor descriptor = {},
+         ReadHistoryPolicy history_policy = ReadHistoryPolicy::Snapshot)
         : core_(std::move(name), capacity), baskets_(capacity, basket_template),
-          descriptor_(std::move(descriptor))
+          descriptor_(std::move(descriptor)), history_policy_(history_policy)
     {
     }
 
@@ -48,7 +55,7 @@ template <typename T> class Pipe
     {
         return core_.faulted();
     }
-    const std::string& fault_message() const noexcept
+    std::string fault_message() const
     {
         return core_.fault_message();
     }
@@ -59,6 +66,11 @@ template <typename T> class Pipe
     void close()
     {
         core_.close();
+    }
+
+    void close_with_error(std::string message)
+    {
+        core_.close_with_error(std::move(message));
     }
 
     WriteToken acquire_write()
@@ -93,6 +105,10 @@ template <typename T> class Pipe
 
     ReadBatchToken acquire_read_batch(size_t read_size, size_t overlap_size = 0)
     {
+        if (overlap_size > 0 && history_policy_ == ReadHistoryPolicy::Disabled)
+        {
+            throw std::invalid_argument("overlap requires Snapshot read history");
+        }
         std::vector<T> last_read_snapshot;
         bool has_previous_read = false;
         size_t previous_read_size = 0;
@@ -109,8 +125,16 @@ template <typename T> class Pipe
         auto core_batch = core_.acquire_read_batch(
             read_size, overlap_size, has_previous_read, previous_read_size);
 
-        recordreplay::detail::RecordReplayRegistry::instance().replay_slots(
-            *this, core_batch.slots, baskets_);
+        try
+        {
+            recordreplay::detail::RecordReplayRegistry::instance().replay_slots(
+                *this, core_batch.slots, baskets_);
+        }
+        catch (...)
+        {
+            core_.release_read_batch(core_batch.token_id);
+            throw;
+        }
 
         std::vector<T> overlap_values;
         overlap_values.reserve(core_batch.overlap_size);
@@ -470,6 +494,11 @@ template <typename T> class Pipe
                             const std::vector<T>& overlap_values, size_t read_size,
                             size_t overlap_size)
     {
+        if (history_policy_ == ReadHistoryPolicy::Disabled)
+        {
+            core_.release_read_batch(token_id);
+            return;
+        }
         std::vector<T> current_read_values;
         current_read_values.reserve(read_size);
         for (size_t i = 0; i < read_size; ++i)
@@ -495,6 +524,7 @@ template <typename T> class Pipe
     PipeCore core_;
     std::vector<T> baskets_;
     PipeDescriptor descriptor_;
+    ReadHistoryPolicy history_policy_;
     mutable std::mutex read_history_mutex_;
     std::vector<T> last_read_values_;
     bool last_read_initialized_ = false;

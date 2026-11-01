@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -54,8 +55,10 @@ class NodeBase
 
     virtual void request_stop() noexcept;
     bool stop_requested() const noexcept;
+    std::exception_ptr failure() const;
 
   protected:
+    void remember_failure(std::exception_ptr failure);
     NodeExceptionContext build_exception_context(std::string message,
                                                  bool unknown_exception,
                                                  bool has_worker_index,
@@ -68,6 +71,8 @@ class NodeBase
     std::vector<std::string> input_port_names_;
     std::vector<std::string> output_port_names_;
     std::atomic<bool> stop_requested_{false};
+    mutable std::mutex failure_mutex_;
+    std::exception_ptr failure_;
 };
 
 class Node : public NodeBase
@@ -86,7 +91,8 @@ class Node : public NodeBase
         virtual ~Task() = default;
     };
 
-    explicit Node(std::string node_name, size_t worker_count = 1);
+    explicit Node(std::string node_name, size_t worker_count = 1,
+                  size_t task_queue_capacity = 1);
     ~Node() override;
 
     void start() override final;
@@ -94,6 +100,7 @@ class Node : public NodeBase
     void request_stop() noexcept override;
 
     size_t worker_count() const noexcept;
+    size_t task_queue_capacity() const noexcept;
 
   protected:
     virtual std::unique_ptr<Task> build_task(uint64_t sequence_id) = 0;
@@ -107,9 +114,12 @@ class Node : public NodeBase
     void run_ingress_manager_wrapped();
     void run_worker_wrapped(size_t worker_index);
     void close_task_queue() noexcept;
+    void discard_task_queue();
     bool pop_task(std::unique_ptr<Task>& task);
+    bool wait_for_task_admission();
 
     size_t worker_count_;
+    size_t task_queue_capacity_;
     std::future<void> ingress_manager_;
     std::vector<std::future<void>> workers_;
     std::deque<std::unique_ptr<Task>> task_queue_;

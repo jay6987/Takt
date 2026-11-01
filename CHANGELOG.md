@@ -6,6 +6,24 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- Opt-out read-history policy for ordinary non-overlap, token-owned image streams.
+- Error closure that rejects new writes, drains the successful prefix and reports failure to readers.
+- Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
+
+### Changed
+- Typed subgraph bridges retain read/write tokens and swap basket storage rather than copying through `std::any`.
+- Endpoint implementations must provide `close_with_error`; vector bridges exchange reusable storage ownership.
+- `fault_message()` returns a synchronized string snapshot instead of an unsynchronized reference.
+
+### Fixed
+- Closing a pipe no longer reports end-of-stream before previously reserved writers finish.
+- An abandoned write no longer exposes later frames across the failed logical position.
+- A closed incomplete segment can drain its successfully published prefix.
+- Ordinary nontrivial payloads no longer require a codec when record/replay is disabled.
+- Replay failure releases the reserved read slots before rethrowing.
+- Consecutive read reservations now advance past segment markers held by earlier active tokens.
+
 ## [0.2.0] - 2026-10-31
 
 ### Added

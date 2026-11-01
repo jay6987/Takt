@@ -4,6 +4,8 @@
 
 - Unified task-driven model with configurable `worker_count`.
 - Default `worker_count` is 1.
+- `task_queue_capacity` defaults to 1 and must be positive. Admission blocks
+  before `build_task` while the queue is full.
 - `build_task(sequence_id)` runs in an ingress manager thread.
 - `process_task(worker_index, task)` runs in worker threads.
 - Typical pattern:
@@ -56,3 +58,30 @@ Node has an internal task queue between ingress manager and workers.
 
 Pipe capacity and token ownership still define the end-to-end pacing and
 backpressure of the graph.
+
+## Token-owned image tasks
+
+The copied scalar example above is not the intended image transport pattern.
+An image task should own move-only `Pipe<std::vector<float>>::ReadToken` and
+`WriteToken` members acquired by `build_task`. Move those tokens into the task,
+enqueue the task, and process directly in their baskets. Call `publish()` only
+after successful processing; destruction retires the write and releases the
+read basket. Do not copy the input image or release its read token during task
+construction. Preallocate each pipe's vector template and each worker's scratch,
+and select `ReadHistoryPolicy::Disabled` for non-overlap streams.
+
+## Failure and shutdown
+
+Nodes retain the first original exception in `failure()`. Worker failure stops
+admission and discards unprocessed queued tasks, so their uncommitted write
+tokens fault the affected pipes rather than publishing invalid output.
+`PipelineRuntime::join()` joins all nodes and then rethrows the first recorded
+failure; `Node::join()` alone remains a non-reporting synchronization operation.
+Subgraph join also finishes its bridge workers before reporting failure.
+
+Pipe-owning nodes must close their bound input/output pipes with an explicit
+error from `on_exception`, and close output after ingress finishes. Closing
+output does not cancel previously reserved write baskets. A stop override or
+external shutdown must close pipes to wake threads blocked in pipe acquisition;
+`Node::request_stop()` only wakes the internal task queue. Derived destructors
+must stop and join before destroying pipe references or worker scratch.

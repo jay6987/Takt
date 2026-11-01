@@ -102,6 +102,21 @@ bool NodeBase::stop_requested() const noexcept
     return stop_requested_.load();
 }
 
+std::exception_ptr NodeBase::failure() const
+{
+    std::lock_guard<std::mutex> lk(failure_mutex_);
+    return failure_;
+}
+
+void NodeBase::remember_failure(std::exception_ptr failure)
+{
+    std::lock_guard<std::mutex> lk(failure_mutex_);
+    if (!failure_)
+    {
+        failure_ = std::move(failure);
+    }
+}
+
 NodeExceptionContext NodeBase::build_exception_context(std::string message,
                                                        bool unknown_exception,
                                                        bool has_worker_index,
@@ -121,12 +136,17 @@ NodeExceptionContext NodeBase::build_exception_context(std::string message,
     return context;
 }
 
-Node::Node(std::string node_name, size_t worker_count)
-    : NodeBase(std::move(node_name)), worker_count_(worker_count)
+Node::Node(std::string node_name, size_t worker_count, size_t task_queue_capacity)
+    : NodeBase(std::move(node_name)), worker_count_(worker_count),
+      task_queue_capacity_(task_queue_capacity)
 {
     if (worker_count_ == 0)
     {
         throw std::invalid_argument("worker_count cannot be zero");
+    }
+    if (task_queue_capacity_ == 0)
+    {
+        throw std::invalid_argument("task queue capacity cannot be zero");
     }
 }
 
@@ -188,6 +208,11 @@ size_t Node::worker_count() const noexcept
     return worker_count_;
 }
 
+size_t Node::task_queue_capacity() const noexcept
+{
+    return task_queue_capacity_;
+}
+
 void Node::on_task_done(size_t worker_index, const Task& task)
 {
     (void)worker_index;
@@ -228,6 +253,10 @@ void Node::run_ingress_manager_wrapped()
         uint64_t sequence_id = 0;
         while (!stop_requested())
         {
+            if (!wait_for_task_admission())
+            {
+                break;
+            }
             auto task = build_task(sequence_id);
             if (!task)
             {
@@ -249,15 +278,27 @@ void Node::run_ingress_manager_wrapped()
     }
     catch (const std::exception& e)
     {
+        remember_failure(std::current_exception());
         on_exception(build_exception_context(e.what(), false, false, 0));
     }
     catch (...)
     {
+        remember_failure(std::current_exception());
         on_exception(build_exception_context("unknown exception", true, false, 0));
     }
 
     close_task_queue();
     on_ingress_manager_done();
+}
+
+bool Node::wait_for_task_admission()
+{
+    std::unique_lock<std::mutex> lk(task_queue_mutex_);
+    task_queue_cv_.wait(lk, [this]
+    {
+        return task_queue_closed_ || task_queue_.size() < task_queue_capacity_;
+    });
+    return !task_queue_closed_;
 }
 
 bool Node::pop_task(std::unique_ptr<Task>& task)
@@ -272,6 +313,8 @@ bool Node::pop_task(std::unique_ptr<Task>& task)
 
     task = std::move(task_queue_.front());
     task_queue_.pop_front();
+    lk.unlock();
+    task_queue_cv_.notify_all();
     return true;
 }
 
@@ -284,6 +327,17 @@ void Node::close_task_queue() noexcept
             return;
         }
         task_queue_closed_ = true;
+    }
+    task_queue_cv_.notify_all();
+}
+
+void Node::discard_task_queue()
+{
+    std::deque<std::unique_ptr<Task>> discarded;
+    {
+        std::lock_guard<std::mutex> lk(task_queue_mutex_);
+        task_queue_closed_ = true;
+        discarded.swap(task_queue_);
     }
     task_queue_cv_.notify_all();
 }
@@ -304,19 +358,34 @@ void Node::run_worker_wrapped(size_t worker_index)
                 break;
             }
 
-            process_task(worker_index, *task);
-            on_task_done(worker_index, *task);
+            try
+            {
+                process_task(worker_index, *task);
+                on_task_done(worker_index, *task);
+            }
+            catch (...)
+            {
+                // Capture the cause before token cleanup wakes other failing threads.
+                remember_failure(std::current_exception());
+                throw;
+            }
             task.reset();
         }
     }
     catch (const std::exception& e)
     {
+        remember_failure(std::current_exception());
+        request_stop();
+        discard_task_queue();
         const bool has_worker_index = worker_count_ > 1;
         on_exception(
             build_exception_context(e.what(), false, has_worker_index, worker_index));
     }
     catch (...)
     {
+        remember_failure(std::current_exception());
+        request_stop();
+        discard_task_queue();
         const bool has_worker_index = worker_count_ > 1;
         on_exception(build_exception_context("unknown exception", true,
                                              has_worker_index, worker_index));
