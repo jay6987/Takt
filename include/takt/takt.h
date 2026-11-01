@@ -1,5 +1,7 @@
 #pragma once
 
+#include "takt/pipeline/graphviz.h"
+
 #include "takt/logging/logger.h"
 #include "takt/pipeline/builder.h"
 #include "takt/pipeline/channel.h"

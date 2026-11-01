@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "takt/pipeline/channel.h"
+#include "takt/pipeline/graphviz.h"
 
 namespace takt
 {
@@ -51,6 +52,8 @@ class PipelineBuilder
     std::shared_ptr<NodeBase> find_bound_node(const std::string& node_name) const;
 
     std::shared_ptr<PipelineRuntime> build_runtime() const;
+    PipelineGraph graph() const;
+    std::string to_dot(DotOptions options = {}) const;
 
     void validate() const;
 

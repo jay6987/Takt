@@ -22,6 +22,7 @@ struct PipelineBuilder::State
     std::vector<NodeSpec> nodes;
     std::vector<EdgeSpec> channels;
     std::unordered_map<std::string, std::shared_ptr<NodeBase>> bound_nodes;
+    std::map<std::string, PipelineGraph> subgraphs;
     mutable std::mutex mutex;
 };
 
@@ -468,6 +469,7 @@ PipelineBuilder& PipelineBuilder::bind_node(std::string node_name,
     {
         throw std::logic_error("cannot bind undeclared node");
     }
+    state_->subgraphs.erase(node_name);
     state_->bound_nodes[std::move(node_name)] = std::move(node);
     return *this;
 }
@@ -518,10 +520,14 @@ PipelineBuilder& PipelineBuilder::bind_subgraph(
             output_port_mappings);
     }
 
+    auto topology = subgraph_builder.graph();
+    topology.input_mappings.insert(input_port_mappings.begin(), input_port_mappings.end());
+    topology.output_mappings.insert(output_port_mappings.begin(), output_port_mappings.end());
     std::lock_guard<std::mutex> lk(state_->mutex);
     state_->bound_nodes[node_name] = std::make_shared<SubgraphNode>(
         node_name, std::move(subgraph_runtime), std::move(input_port_mappings),
         std::move(output_port_mappings), std::move(bridge_links));
+    state_->subgraphs[node_name] = std::move(topology);
     return *this;
 }
 
@@ -622,5 +628,16 @@ void PipelineBuilder::validate() const
 {
     std::lock_guard<std::mutex> lk(state_->mutex);
     validate_locked(*state_);
+}
+
+PipelineGraph PipelineBuilder::graph() const
+{
+    std::lock_guard<std::mutex> lk(state_->mutex);
+    return {state_->name, state_->nodes, state_->channels, state_->subgraphs, {}, {}};
+}
+
+std::string PipelineBuilder::to_dot(DotOptions options) const
+{
+    return takt::to_dot(graph(), options);
 }
 } // namespace takt

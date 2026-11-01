@@ -54,6 +54,46 @@ For mapped ports, set `pipe_endpoint` on both sides:
 
 Missing this descriptor causes `missing pipe_endpoint descriptor ...` errors.
 
+## DOT export
+
+Export the declared topology before or after binding nodes; no workers are started:
+
+```cpp
+std::string expanded = outer.to_dot();
+std::string collapsed = outer.to_dot({false, true});
+std::string vertical = outer.to_dot({true, false});
+```
+
+`DotOptions` controls `expand_subgraphs` (default true) and `left_to_right`
+(default true). Write the returned string to a file using your application's
+normal checked I/O. Graphviz is not a Takt build/runtime dependency. If available:
+
+```sh
+dot -Tsvg pipeline.dot -o pipeline.svg
+```
+
+Expanded subgraphs become nested `cluster` groups with separate input/output
+boundary nodes and dashed port-mapping edges. This avoids artificial cycles
+through a single interface node. Collapsed subgraphs use a 3D box. Normal edges
+show channel names (when provided) and source/target port names.
+Names are escaped as DOT strings, and generated structural IDs cannot collide
+when names repeat in different subgraphs. Output order is deterministic for the
+same topology; arbitrary descriptors, endpoint pointers and payloads are not
+exported. Invalid node/port references and unsupported control characters throw.
+
+`builder.graph()` returns a value snapshot. Bound subgraphs retain their topology
+at binding time, matching their built runtime; later edits to an inner builder
+do not silently change the exported bound subgraph. Rebinding that node with
+`bind_node()` removes the old subgraph description. Export snapshots are taken
+under the builder's mutex; configure/bind builders before starting workers.
+
+For diagrams that describe an algorithm without a runnable Takt pipeline,
+construct `PipelineGraph` directly and call `takt::to_dot(graph)`. Populate
+`nodes`/`edges`, attach inner graphs in `subgraphs` keyed by outer node name,
+and set each inner graph's `input_mappings`/`output_mappings`. Such a diagram
+describes supplied topology only: it is not evidence that a runtime was executed
+or a performance trace.
+
 ## Runnable Example
 
 - Source: `examples/subgraph/main.cpp`

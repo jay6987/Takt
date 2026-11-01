@@ -270,6 +270,10 @@ TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
         EXPECT_EQ(read.value()[7], 42.0F);
     }
     EXPECT_THROW(source->transfer_to(*source), std::invalid_argument);
+    {
+        auto write = input->acquire_write();
+        write.publish();
+    }
     auto mismatch =
         takt::make_pipe_endpoint(std::make_shared<takt::Pipe<double>>("other", 1));
     EXPECT_THROW(source->transfer_to(*mismatch), takt::PipeEndpointTypeMismatchError);

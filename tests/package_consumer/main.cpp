@@ -2,6 +2,12 @@
 
 int main()
 {
+    auto graph = takt::PipelineBuilder::declare("installed-dot");
+    graph.add_node("source");
+    if (graph.to_dot().find("source") == std::string::npos)
+    {
+        return 1;
+    }
     takt::Pipe<int> pipe("installed-package", 2, 0);
     {
         auto write = pipe.acquire_write(true);

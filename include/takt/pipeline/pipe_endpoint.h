@@ -99,17 +99,17 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
     void transfer_to(AnyPipeEndpoint& target) override
     {
         auto* typed_target = dynamic_cast<TypedPipeEndpoint<T>*>(&target);
+        if (typed_target && pipe_ == typed_target->pipe_)
+        {
+            throw std::invalid_argument("cannot bridge a pipe to itself");
+        }
+        auto read_token = pipe_->acquire_mutable_read();
         if (!typed_target)
         {
             throw PipeEndpointTypeMismatchError("pipe endpoint type mismatch: " +
                                                 debug_name() + " -> " +
                                                 target.debug_name());
         }
-        if (pipe_ == typed_target->pipe_)
-        {
-            throw std::invalid_argument("cannot bridge a pipe to itself");
-        }
-        auto read_token = pipe_->acquire_mutable_read();
         auto write_token =
             typed_target->pipe_->acquire_write(read_token.is_segment_end());
         using std::swap;

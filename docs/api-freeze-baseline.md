@@ -12,6 +12,7 @@ The public API is defined by `include/takt/takt.h` and the headers it exports:
 - `include/takt/pipeline/builder.h`
 - `include/takt/pipeline/node.h`
 - `include/takt/pipeline/pipeline_builder.h`
+- `include/takt/pipeline/graphviz.h` (additive, unreleased)
 - `include/takt/pipeline/pipeline_runtime.h`
 - `include/takt/pipeline/pipe.h`
 - `include/takt/pipeline/pipe_endpoint.h`
@@ -34,6 +35,9 @@ The public API is defined by `include/takt/takt.h` and the headers it exports:
 - `struct NodePortRef`
 - `class PipelineBuilder`
 - `class PipelineRuntime`
+- `struct PipelineGraph` (additive, unreleased)
+- `struct DotOptions` (additive, unreleased)
+- `std::string to_dot(const PipelineGraph&, DotOptions)` (additive, unreleased)
 
 ### Node Model
 

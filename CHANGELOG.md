@@ -7,6 +7,10 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- `PipelineBuilder::graph()` and `to_dot()` export topology without running workers.
+- `PipelineGraph`, `DotOptions` and free `to_dot()` support descriptive graphs,
+  nested Graphviz clusters, collapsed subgraphs, ports and edge labels.
+- Bound subgraphs retain value-owned topology snapshots for deterministic recursive export.
 - Opt-out read-history policy for ordinary non-overlap, token-owned image streams.
 - Error closure that rejects new writes, drains the successful prefix and reports failure to readers.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
@@ -17,6 +21,8 @@ This project follows Semantic Versioning.
 - `fault_message()` returns a synchronized string snapshot instead of an unsynchronized reference.
 
 ### Fixed
+- Typed bridge mismatch reporting waits for a source packet, preserving packet
+  transfer ordering rather than asynchronously rejecting a producer before its first write.
 - Closing a pipe no longer reports end-of-stream before previously reserved writers finish.
 - An abandoned write no longer exposes later frames across the failed logical position.
 - A closed incomplete segment can drain its successfully published prefix.

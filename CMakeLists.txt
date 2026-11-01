@@ -18,6 +18,7 @@ add_library(takt STATIC
     src/pipeline/pipeline_builder.cpp
     src/pipeline/pipeline_runtime.cpp
     src/pipeline/pipe_core.cpp
+    src/pipeline/graphviz.cpp
 )
 
 add_library(takt::takt ALIAS takt)
