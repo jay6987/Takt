@@ -78,6 +78,11 @@ Pipeline headers:
 
 ## Node Model
 
+Use `PipelineBuilder::create(name)` for a scoped, independent graph: its state and
+bound nodes are released when the builder copies and runtimes release ownership.
+`PipelineBuilder::declare(name)` instead reuses state in the process-wide named
+registry. Stop and join running nodes before releasing their dependencies.
+
 - `Node`: unified node type; default worker count is 1.
 - Override `build_task(sequence_id)` and `process_task(worker_index, task)` for workloads.
 - Set worker count via `Node("name", worker_count)` when parallelism is needed.

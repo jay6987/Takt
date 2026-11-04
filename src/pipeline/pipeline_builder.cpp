@@ -339,6 +339,11 @@ PipelineBuilder PipelineBuilder::declare(std::string name)
     return PipelineBuilder(Registry::instance().get_or_create_state(name));
 }
 
+PipelineBuilder PipelineBuilder::create(std::string name)
+{
+    return PipelineBuilder(std::make_shared<State>(std::move(name)));
+}
+
 PipelineBuilder::PipelineBuilder(std::shared_ptr<State> state)
     : state_(std::move(state))
 {

@@ -7,6 +7,8 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Scoped `PipelineBuilder::create(name)` creates independent state without retaining
+  bound nodes and payload storage in the named registry.
 - `PipelineBuilder::graph()` and `to_dot()` export topology without running workers.
 - `PipelineGraph`, `DotOptions` and free `to_dot()` support descriptive graphs,
   nested Graphviz clusters, collapsed subgraphs, ports and edge labels.

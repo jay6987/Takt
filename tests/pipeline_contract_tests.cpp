@@ -141,6 +141,7 @@ TEST(PipelineContracts, DisabledHistoryDoesNotCopyPayloadAtReadRelease)
         auto write = pipe.acquire_write();
         write.publish();
     }
+
     {
         auto read = pipe.acquire_read();
         auto retained = std::move(read);
@@ -149,6 +150,21 @@ TEST(PipelineContracts, DisabledHistoryDoesNotCopyPayloadAtReadRelease)
     EXPECT_EQ(CopyProbe::copies, 0);
     EXPECT_THROW((void)pipe.acquire_read_batch(1, 1), std::invalid_argument);
     pipe.close();
+}
+
+TEST(PipelineContracts, UnregisteredBuildersAreIndependentAndReleaseBoundNodes)
+{
+    std::weak_ptr<takt::NodeBase> weak;
+    {
+        auto first = takt::PipelineBuilder::create("scoped");
+        first.add_node("first");
+        auto bound = std::make_shared<BlockedNode>(std::shared_future<void>{});
+        weak = bound;
+        first.bind_node("first", bound);
+        auto second = takt::PipelineBuilder::create("scoped");
+        EXPECT_TRUE(second.nodes().empty());
+    }
+    EXPECT_TRUE(weak.expired());
 }
 
 TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)

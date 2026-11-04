@@ -17,6 +17,9 @@ class PipelineBuilder
 {
   public:
     static PipelineBuilder declare(std::string name);
+    // Independent lifetime; unlike declare(), does not retain state in the named
+    // registry.
+    static PipelineBuilder create(std::string name);
 
     PipelineBuilder(const PipelineBuilder&);
     PipelineBuilder& operator=(const PipelineBuilder&);
