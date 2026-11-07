@@ -34,6 +34,18 @@ ctest --test-dir build --output-on-failure
 - `Node` is a task-driven abstraction with one ingress manager thread and
     configurable worker threads.
 - Graceful termination relies on `PipeClosedAndEmptySignal`.
+- Create and wire name-only pipes, configure both ends, then call
+  `PipelineRuntime::initialize()` before `start()`. Standalone pipes call their
+  own `initialize()` before acquisition. See [Pipe Usage](pipe-usage.md).
+
+## Upgrading an Installed Package
+
+Use a fresh Takt installation prefix for the lifecycle migration, or remove
+only the obsolete `include/takt/pipeline/builder.h` from the previous prefix
+before reinstalling. `install(DIRECTORY include/)` does not delete headers that
+disappeared from the source tree. Reconfigure consumers against the new prefix;
+do not use an old PipeBuilder header from another include directory. The
+installed-package smoke consumer rejects the removed header if discoverable.
 
 ## Subgraph Mapping (Runnable Pattern)
 
@@ -41,10 +53,20 @@ ctest --test-dir build --output-on-failure
 #include "takt/takt.h"
 
 int main() {
-    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in", 16, 0);
-    auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out", 16, 0);
-    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in", 16, 0);
-    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out", 16, 0);
+    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in");
+    outer_in->set_producer({"source", 1, 1}, 0);
+    outer_in->set_consumer({"input-bridge", 1, 1, 0});
+    auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out");
+    outer_out->set_producer({"output-bridge", 1, 1}, 0);
+    outer_out->set_consumer({"sink", 1, 1, 0});
+    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in");
+    inner_in->set_producer({"input-bridge", 1, 1}, 0);
+    inner_in->set_consumer({"worker", 1, 1, 0});
+    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out");
+    inner_out->set_producer({"worker", 1, 1}, 0);
+    inner_out->set_consumer({"output-bridge", 1, 1, 0});
+    for (const auto& pipe : {outer_in, outer_out, inner_in, inner_out})
+        pipe->set_capacity(16);
 
     auto inner = takt::PipelineBuilder::declare("inner");
     inner.add_node("worker");
@@ -78,6 +100,7 @@ int main() {
         {{"result", {"worker", "out"}}});
 
     auto runtime = outer.build_runtime();
+    runtime->initialize();
     runtime->start();
     runtime->request_stop();
     runtime->join();
@@ -86,6 +109,12 @@ int main() {
 ```
 
 ## Troubleshooting
+
+- `pipe='...' ... configuration is missing` or `pipe is not initialized`:
+    - Configure producer/template and consumer on the same shared pipe object.
+    - Initialize the runtime before starting or prefilling/closing input pipes.
+- Configuration frozen/cancelled errors:
+    - Finish configuration before initialization; cancelled pipes cannot restart.
 
 - `missing pipe_endpoint descriptor ...`:
     - Cause: mapped port is missing `{"pipe_endpoint", make_pipe_endpoint<T>(...)}` in descriptor.

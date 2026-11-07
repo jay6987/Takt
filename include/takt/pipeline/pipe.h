@@ -1,10 +1,12 @@
 #pragma once
 
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "takt/pipeline/descriptor.h"
+#include "takt/pipeline/pipe_base.h"
 #include "takt/pipeline/pipe_core.h"
 #include "takt/recordreplay/recordreplay.h"
 
@@ -16,7 +18,7 @@ enum class ReadHistoryPolicy
     Disabled,
 };
 
-template <typename T> class Pipe
+template <typename T> class Pipe : public PipeBase
 {
   public:
     class WriteToken;
@@ -24,53 +26,103 @@ template <typename T> class Pipe
     class ReadToken;
     class ReadBatchToken;
 
-    Pipe(std::string name, size_t capacity, const T& basket_template = T(),
-         PipeDescriptor descriptor = {},
-         ReadHistoryPolicy history_policy = ReadHistoryPolicy::Snapshot)
-        : core_(std::move(name), capacity), baskets_(capacity, basket_template),
-          descriptor_(std::move(descriptor)), history_policy_(history_policy)
+    explicit Pipe(std::string name) : PipeBase(std::move(name)) {}
+
+    void set_producer(ProducerConfig config, T basket_template)
     {
+        require_configuring();
+        if (has_producer())
+            fail("producer is already configured");
+        auto storage = std::make_unique<T>(std::move(basket_template));
+        set_producer_config(std::move(config));
+        basket_template_ = std::move(storage);
+    }
+
+    const T& basket_template() const
+    {
+        if (!basket_template_)
+            fail("basket template is only available during configuration");
+        return *basket_template_;
+    }
+
+    void set_descriptor(PipeDescriptor descriptor)
+    {
+        require_configuring();
+        descriptor_ = std::move(descriptor);
+    }
+
+    void set_read_history_policy(ReadHistoryPolicy policy)
+    {
+        require_configuring();
+        history_policy_ = policy;
+    }
+
+    void validate_configuration() const override
+    {
+        validate_common();
+        if (!basket_template_)
+            fail("producer basket template is missing");
+        if (history_policy_ == ReadHistoryPolicy::Disabled &&
+            consumer_config().overlap_size != 0)
+            throw std::invalid_argument(
+                context("overlap requires Snapshot read history"));
+    }
+
+    void initialize() override
+    {
+        validate_configuration();
+        const auto count = capacity();
+        auto core = std::make_unique<PipeCore>(name(), count);
+        std::vector<T> baskets(count, *basket_template_);
+        core_ = std::move(core);
+        baskets_ = std::move(baskets);
+        basket_template_.reset();
+        initialized_ = true;
     }
 
     Pipe(const Pipe&) = delete;
     Pipe& operator=(const Pipe&) = delete;
 
-    const std::string& name() const noexcept
-    {
-        return core_.name();
-    }
-    size_t capacity() const noexcept
-    {
-        return core_.capacity();
-    }
     size_t size() const noexcept
     {
-        return core_.size();
+        return core_ ? core_->size() : 0;
     }
-    bool closed() const noexcept
+    bool closed() const noexcept override
     {
-        return core_.closed();
+        return core_ ? core_->closed() : cancelled_;
     }
-    bool faulted() const noexcept
+    bool faulted() const noexcept override
     {
-        return core_.faulted();
+        return core_ ? core_->faulted() : !configuration_error_.empty();
     }
     std::string fault_message() const
     {
-        return core_.fault_message();
+        return core_ ? core_->fault_message() : configuration_error_;
     }
     const PipeDescriptor& descriptor() const noexcept
     {
         return descriptor_;
     }
-    void close()
+    void close() override
     {
-        core_.close();
+        if (core_)
+            core_->close();
+        else
+            cancelled_ = true;
     }
 
     void close_with_error(std::string message)
     {
-        core_.close_with_error(std::move(message));
+        if (message.empty())
+            throw std::invalid_argument(context("pipe error message cannot be empty"));
+        if (core_)
+            core_->close_with_error(std::move(message));
+        else
+        {
+            if (configuration_error_.empty())
+                configuration_error_ = std::move(message);
+            cancelled_ = true;
+        }
     }
 
     WriteToken acquire_write()
@@ -87,9 +139,21 @@ template <typename T> class Pipe
 
     WriteBatchToken acquire_write_batch(size_t count, bool is_segment_end)
     {
-        auto batch = core_.acquire_write_batch(count, is_segment_end);
+        require_initialized();
+        auto batch = core_->acquire_write_batch(count, is_segment_end);
         return WriteBatchToken(this, batch.token_id, batch.is_segment_start,
                                batch.is_segment_end, std::move(batch.slots));
+    }
+
+    WriteBatchToken acquire_configured_write_batch(bool is_segment_end)
+    {
+        return acquire_write_batch(producer_config().write_size, is_segment_end);
+    }
+
+    ReadBatchToken acquire_configured_read_batch()
+    {
+        const auto& config = consumer_config();
+        return acquire_read_batch(config.read_size, config.overlap_size);
     }
 
     ReadToken acquire_read()
@@ -105,6 +169,7 @@ template <typename T> class Pipe
 
     ReadBatchToken acquire_read_batch(size_t read_size, size_t overlap_size = 0)
     {
+        require_initialized();
         if (overlap_size > 0 && history_policy_ == ReadHistoryPolicy::Disabled)
         {
             throw std::invalid_argument("overlap requires Snapshot read history");
@@ -122,7 +187,7 @@ template <typename T> class Pipe
             }
         }
 
-        auto core_batch = core_.acquire_read_batch(
+        auto core_batch = core_->acquire_read_batch(
             read_size, overlap_size, has_previous_read, previous_read_size);
 
         try
@@ -132,7 +197,7 @@ template <typename T> class Pipe
         }
         catch (...)
         {
-            core_.release_read_batch(core_batch.token_id);
+            core_->release_read_batch(core_batch.token_id);
             throw;
         }
 
@@ -487,7 +552,7 @@ template <typename T> class Pipe
   private:
     void release_write_batch(size_t token_id, bool published)
     {
-        core_.release_write_batch(token_id, published);
+        core_->release_write_batch(token_id, published);
     }
 
     void release_read_batch(size_t token_id, const std::vector<size_t>& slots,
@@ -496,7 +561,7 @@ template <typename T> class Pipe
     {
         if (history_policy_ == ReadHistoryPolicy::Disabled)
         {
-            core_.release_read_batch(token_id);
+            core_->release_read_batch(token_id);
             return;
         }
         std::vector<T> current_read_values;
@@ -518,13 +583,15 @@ template <typename T> class Pipe
             last_read_initialized_ = true;
         }
 
-        core_.release_read_batch(token_id);
+        core_->release_read_batch(token_id);
     }
 
-    PipeCore core_;
+    std::unique_ptr<PipeCore> core_;
+    std::unique_ptr<T> basket_template_;
     std::vector<T> baskets_;
     PipeDescriptor descriptor_;
-    ReadHistoryPolicy history_policy_;
+    ReadHistoryPolicy history_policy_ = ReadHistoryPolicy::Snapshot;
+    std::string configuration_error_;
     mutable std::mutex read_history_mutex_;
     std::vector<T> last_read_values_;
     bool last_read_initialized_ = false;

@@ -5,7 +5,11 @@
 
 int main()
 {
-    takt::Pipe<int> numbers("numbers", 8, 0);
+    takt::Pipe<int> numbers("numbers");
+    numbers.set_producer({"source", 1, 1}, 0);
+    numbers.set_consumer({"sink", 1, 1, 0});
+    numbers.set_capacity(8);
+    numbers.initialize();
 
     for (int i = 1; i <= 5; ++i)
     {

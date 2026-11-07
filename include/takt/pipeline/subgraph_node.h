@@ -35,6 +35,7 @@ class SubgraphNode final : public NodeBase
     void start() override;
     void join() override;
     void request_stop() noexcept override;
+    std::vector<std::shared_ptr<PipelineRuntime>> child_runtimes() const override;
 
     const std::unordered_map<std::string, NodePortRef>&
     input_port_mappings() const noexcept;

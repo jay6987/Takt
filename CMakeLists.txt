@@ -14,7 +14,6 @@ add_library(takt STATIC
     src/logging/global_logger.cpp
     src/pipeline/node.cpp
     src/pipeline/subgraph_node.cpp
-    src/pipeline/builder.cpp
     src/pipeline/pipeline_builder.cpp
     src/pipeline/pipeline_runtime.cpp
     src/pipeline/pipe_core.cpp

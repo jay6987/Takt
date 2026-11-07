@@ -9,7 +9,8 @@ The public API is defined by `include/takt/takt.h` and the headers it exports:
 - `include/takt/recordreplay/recordreplay.h`
 - `include/takt/logging/logger.h`
 - `include/takt/pipeline/channel.h`
-- `include/takt/pipeline/builder.h`
+- `include/takt/pipeline/pipe_base.h` (breaking, unreleased lifecycle migration)
+- `include/takt/pipeline/pipe_config.h` (breaking, unreleased lifecycle migration)
 - `include/takt/pipeline/node.h`
 - `include/takt/pipeline/pipeline_builder.h`
 - `include/takt/pipeline/graphviz.h` (additive, unreleased)
@@ -23,6 +24,11 @@ The public API is defined by `include/takt/takt.h` and the headers it exports:
 - No rename/removal/signature change for public symbols in this cycle.
 - Additive API changes require explicit release-note entry.
 - Behavior changes that alter error/close/lifecycle semantics require new tests.
+
+The approved unreleased lifecycle migration explicitly supersedes the original
+freeze for pipes/runtime preparation. `PipeBuilder` and immediately initialized
+Pipe constructors are removed. See [Changelog](../CHANGELOG.md) and
+[Pipe Usage](pipe-usage.md) for the required migration; C++17 remains the minimum.
 
 ## Public Declarations Snapshot
 
@@ -49,7 +55,10 @@ The public API is defined by `include/takt/takt.h` and the headers it exports:
 ### Pipe Model
 
 - `using PipeDescriptor`
-- `class PipeBuilder`
+- `class PipeBase`
+- `struct ProducerConfig`
+- `struct ConsumerConfig`
+- `enum class BufferPolicy`
 - `template <typename T> class Pipe`
 - `class AnyPipeEndpoint`
 - `template <typename T> class TypedPipeEndpoint`

@@ -1,4 +1,5 @@
 #include "takt/takt.h"
+#include "pipe_test_support.h"
 
 #include <algorithm>
 #include <atomic>
@@ -70,7 +71,9 @@ TEST(PipeTests, SingleElementReadWrite)
     takt::set_debug_enabled(true);
     takt::debug("smoke test debug log");
 
-    takt::Pipe<int> pipe("numbers", 2, 0);
+    takt::Pipe<int> pipe("numbers");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
     {
         auto wt = pipe.acquire_write(true);
         wt.value() = 42;
@@ -85,7 +88,9 @@ TEST(PipeTests, SingleElementReadWrite)
 
 TEST(PipeTests, BatchReadWrite)
 {
-    takt::Pipe<int> batch_pipe("batch", 8, 0);
+    takt::Pipe<int> batch_pipe("batch");
+    configure_pipe(batch_pipe, 8, 0);
+    batch_pipe.initialize();
     {
         auto wb = batch_pipe.acquire_write_batch(4, true);
         wb.value(0) = 10;
@@ -105,7 +110,9 @@ TEST(PipeTests, BatchReadWrite)
 
 TEST(PipeTests, MutableReadTokenSingleElementInplace)
 {
-    takt::Pipe<int> pipe("mutable-single", 4, 0);
+    takt::Pipe<int> pipe("mutable-single");
+    configure_pipe(pipe, 4, 0);
+    pipe.initialize();
     {
         auto w = pipe.acquire_write(true);
         w.value() = 11;
@@ -132,7 +139,9 @@ TEST(PipeTests, MutableReadTokenSingleElementInplace)
 
 TEST(PipeTests, MutableReadTokenBatchInplace)
 {
-    takt::Pipe<int> pipe("mutable-batch", 8, 0);
+    takt::Pipe<int> pipe("mutable-batch");
+    configure_pipe(pipe, 8, 0);
+    pipe.initialize();
     {
         auto w = pipe.acquire_write_batch(4, true);
         w.value(0) = 1;
@@ -167,7 +176,9 @@ TEST(PipeTests, MutableReadTokenBatchInplace)
 
 TEST(PipeTests, OverlapRead)
 {
-    takt::Pipe<int> batch_pipe("batch-overlap", 8, 0);
+    takt::Pipe<int> batch_pipe("batch-overlap");
+    configure_pipe(batch_pipe, 8, 0);
+    batch_pipe.initialize();
     {
         auto wb = batch_pipe.acquire_write_batch(6, true);
         for (size_t i = 0; i < 6; ++i)
@@ -194,7 +205,9 @@ TEST(PipeTests, OverlapRead)
 
 TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
 {
-    takt::Pipe<int> pipe("segment", 16, 0);
+    takt::Pipe<int> pipe("segment");
+    configure_pipe(pipe, 16, 0);
+    pipe.initialize();
 
     {
         auto w1 = pipe.acquire_write_batch(3, true);
@@ -234,7 +247,9 @@ TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
 
 TEST(PipeTests, SegmentFlagsOnWriteTokens)
 {
-    takt::Pipe<int> pipe("segment-flags", 8, 0);
+    takt::Pipe<int> pipe("segment-flags");
+    configure_pipe(pipe, 8, 0);
+    pipe.initialize();
 
     auto w1 = pipe.acquire_write(false);
     EXPECT_TRUE(w1.is_segment_start());
@@ -258,11 +273,13 @@ TEST(PipeTests, SegmentFlagsOnWriteTokens)
 TEST(PipeTests, ExternalRecordReplayForTrivialType)
 {
     const auto file_path =
-        (std::filesystem::temp_directory_path() / "takt_record_replay_trivial_test.bin")
+        (std::filesystem::current_path() / "takt_record_replay_trivial_test.bin")
             .string();
 
     {
-        takt::Pipe<int> record_pipe("record-int", 8, 0);
+        takt::Pipe<int> record_pipe("record-int");
+        configure_pipe(record_pipe, 8, 0);
+        record_pipe.initialize();
         auto record =
             takt::recordreplay::make_scoped_record(record_pipe, file_path);
         ASSERT_TRUE(record.active());
@@ -277,7 +294,9 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
     }
 
     {
-        takt::Pipe<int> replay_pipe("replay-int", 8, 0);
+        takt::Pipe<int> replay_pipe("replay-int");
+        configure_pipe(replay_pipe, 8, 0);
+        replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
         ASSERT_TRUE(replay.active());
@@ -303,11 +322,13 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
 
 TEST(PipeTests, ExternalRecordReplayRequiresCodecForNonTrivialType)
 {
-    const auto file_path = (std::filesystem::temp_directory_path() /
+    const auto file_path = (std::filesystem::current_path() /
                             "takt_record_replay_nontrivial_test.bin")
                                .string();
 
-    takt::Pipe<NonTrivialPayload> pipe("nontrivial", 2, NonTrivialPayload{});
+    takt::Pipe<NonTrivialPayload> pipe("nontrivial");
+    configure_pipe(pipe, 2, NonTrivialPayload{});
+    pipe.initialize();
     EXPECT_THROW(takt::recordreplay::make_scoped_record(pipe, file_path),
                  std::runtime_error);
 }
@@ -317,10 +338,11 @@ TEST(PipeTests, ScopedRecordResetReportsStreamFailure)
     register_failing_record_codec();
 
     const auto file_path =
-        (std::filesystem::temp_directory_path() / "takt_record_replay_failed_reset.bin")
+        (std::filesystem::current_path() / "takt_record_replay_failed_reset.bin")
             .string();
-    takt::Pipe<FailingRecordPayload> pipe("failed-record-reset", 2,
-                                         FailingRecordPayload{});
+    takt::Pipe<FailingRecordPayload> pipe("failed-record-reset");
+    configure_pipe(pipe, 2, FailingRecordPayload{});
+    pipe.initialize();
     auto record = takt::recordreplay::make_scoped_record(pipe, file_path);
 
     {
@@ -340,18 +362,19 @@ TEST(PipeTests, FailedRecordGuardCannotClearReplacementBinding)
 {
     register_failing_record_codec();
     const auto failed_path =
-        (std::filesystem::temp_directory_path() / "takt_record_stale_guard_failed.bin")
+        (std::filesystem::current_path() / "takt_record_stale_guard_failed.bin")
             .string();
     const auto replacement_path =
-        (std::filesystem::temp_directory_path() / "takt_record_stale_guard_replacement.bin")
+        (std::filesystem::current_path() / "takt_record_stale_guard_replacement.bin")
             .string();
     const auto duplicate_path =
-        (std::filesystem::temp_directory_path() / "takt_record_stale_guard_duplicate.bin")
+        (std::filesystem::current_path() / "takt_record_stale_guard_duplicate.bin")
             .string();
 
     {
-        takt::Pipe<FailingRecordPayload> pipe("record-stale-guard", 2,
-                                             FailingRecordPayload{});
+        takt::Pipe<FailingRecordPayload> pipe("record-stale-guard");
+        configure_pipe(pipe, 2, FailingRecordPayload{});
+        pipe.initialize();
         auto failed =
             takt::recordreplay::make_scoped_record(pipe, failed_path);
         {
@@ -378,13 +401,13 @@ TEST(PipeTests, FailedReplayGuardCannotClearReplacementBinding)
 {
     register_failing_record_codec();
     const auto failed_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_stale_guard_failed.bin")
+        (std::filesystem::current_path() / "takt_replay_stale_guard_failed.bin")
             .string();
     const auto replacement_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_stale_guard_replacement.bin")
+        (std::filesystem::current_path() / "takt_replay_stale_guard_replacement.bin")
             .string();
     const auto duplicate_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_stale_guard_duplicate.bin")
+        (std::filesystem::current_path() / "takt_replay_stale_guard_duplicate.bin")
             .string();
     {
         std::ofstream file(failed_path, std::ios::binary);
@@ -403,8 +426,9 @@ TEST(PipeTests, FailedReplayGuardCannotClearReplacementBinding)
     }
 
     {
-        takt::Pipe<FailingRecordPayload> pipe("replay-stale-guard", 2,
-                                             FailingRecordPayload{});
+        takt::Pipe<FailingRecordPayload> pipe("replay-stale-guard");
+        configure_pipe(pipe, 2, FailingRecordPayload{});
+        pipe.initialize();
         auto failed =
             takt::recordreplay::make_scoped_replay(pipe, failed_path);
         {
@@ -431,12 +455,14 @@ TEST(PipeTests, FailedReplayGuardCannotClearReplacementBinding)
 TEST(PipeTests, ScopedRecordRejectsOverlappingGuards)
 {
     const auto first_path =
-        (std::filesystem::temp_directory_path() / "takt_record_overlap_first.bin")
+        (std::filesystem::current_path() / "takt_record_overlap_first.bin")
             .string();
     const auto second_path =
-        (std::filesystem::temp_directory_path() / "takt_record_overlap_second.bin")
+        (std::filesystem::current_path() / "takt_record_overlap_second.bin")
             .string();
-    takt::Pipe<int> pipe("record-overlap", 2, 0);
+    takt::Pipe<int> pipe("record-overlap");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
     auto record = takt::recordreplay::make_scoped_record(pipe, first_path);
 
     EXPECT_THROW(takt::recordreplay::make_scoped_record(pipe, second_path),
@@ -450,17 +476,19 @@ TEST(PipeTests, ScopedRecordRejectsOverlappingGuards)
 TEST(PipeTests, ScopedReplayRejectsOverlappingGuards)
 {
     const auto first_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_overlap_first.bin")
+        (std::filesystem::current_path() / "takt_replay_overlap_first.bin")
             .string();
     const auto second_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_overlap_second.bin")
+        (std::filesystem::current_path() / "takt_replay_overlap_second.bin")
             .string();
     {
         std::ofstream first_file(first_path, std::ios::binary);
         std::ofstream second_file(second_path, std::ios::binary);
     }
 
-    takt::Pipe<int> pipe("replay-overlap", 2, 0);
+    takt::Pipe<int> pipe("replay-overlap");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
     auto replay = takt::recordreplay::make_scoped_replay(pipe, first_path);
 
     EXPECT_THROW(takt::recordreplay::make_scoped_replay(pipe, second_path),
@@ -474,16 +502,20 @@ TEST(PipeTests, ScopedReplayRejectsOverlappingGuards)
 TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
 {
     const auto old_path =
-        (std::filesystem::temp_directory_path() / "takt_record_move_assign_old.bin")
+        (std::filesystem::current_path() / "takt_record_move_assign_old.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() /
+        (std::filesystem::current_path() /
          "takt_record_move_assign_source.bin")
             .string();
 
     {
-        takt::Pipe<int> target_pipe("record-move-target", 2, 0);
-        takt::Pipe<int> source_pipe("record-move-source", 2, 0);
+        takt::Pipe<int> target_pipe("record-move-target");
+        takt::Pipe<int> source_pipe("record-move-source");
+        configure_pipe(target_pipe, 2, 0);
+        configure_pipe(source_pipe, 2, 0);
+        target_pipe.initialize();
+        source_pipe.initialize();
         auto target = takt::recordreplay::make_scoped_record(target_pipe, old_path);
         auto source =
             takt::recordreplay::make_scoped_record(source_pipe, source_path);
@@ -499,7 +531,9 @@ TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
         }
         EXPECT_NO_THROW(target.reset());
 
-        takt::Pipe<int> replay_pipe("record-move-verify", 2, 0);
+        takt::Pipe<int> replay_pipe("record-move-verify");
+        configure_pipe(replay_pipe, 2, 0);
+        replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, source_path);
         {
@@ -518,10 +552,10 @@ TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
 TEST(PipeTests, ScopedReplayMoveAssignmentTransfersBinding)
 {
     const auto old_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_old.bin")
+        (std::filesystem::current_path() / "takt_replay_move_assign_old.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() /
+        (std::filesystem::current_path() /
          "takt_replay_move_assign_source.bin")
             .string();
     {
@@ -535,8 +569,12 @@ TEST(PipeTests, ScopedReplayMoveAssignmentTransfersBinding)
     }
 
     {
-        takt::Pipe<int> target_pipe("replay-move-target", 2, 0);
-        takt::Pipe<int> source_pipe("replay-move-source", 2, 0);
+        takt::Pipe<int> target_pipe("replay-move-target");
+        takt::Pipe<int> source_pipe("replay-move-source");
+        configure_pipe(target_pipe, 2, 0);
+        configure_pipe(source_pipe, 2, 0);
+        target_pipe.initialize();
+        source_pipe.initialize();
         auto target = takt::recordreplay::make_scoped_replay(target_pipe, old_path);
         auto source =
             takt::recordreplay::make_scoped_replay(source_pipe, source_path);
@@ -563,18 +601,20 @@ TEST(PipeTests, ScopedRecordMoveAssignmentFailurePreservesSource)
 {
     register_failing_record_codec();
     const auto target_path =
-        (std::filesystem::temp_directory_path() / "takt_record_move_assign_failure.bin")
+        (std::filesystem::current_path() / "takt_record_move_assign_failure.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() /
+        (std::filesystem::current_path() /
          "takt_record_move_assign_failure_source.bin")
             .string();
 
     {
-        takt::Pipe<FailingRecordPayload> target_pipe("record-move-failure-target", 2,
-                                                     FailingRecordPayload{});
-        takt::Pipe<FailingRecordPayload> source_pipe("record-move-failure-source", 2,
-                                                     FailingRecordPayload{});
+        takt::Pipe<FailingRecordPayload> target_pipe("record-move-failure-target");
+        takt::Pipe<FailingRecordPayload> source_pipe("record-move-failure-source");
+        configure_pipe(target_pipe, 2, FailingRecordPayload{});
+        configure_pipe(source_pipe, 2, FailingRecordPayload{});
+        target_pipe.initialize();
+        source_pipe.initialize();
         auto target =
             takt::recordreplay::make_scoped_record(target_pipe, target_path);
         auto source =
@@ -601,10 +641,10 @@ TEST(PipeTests, ScopedReplayMoveAssignmentFailurePreservesSource)
 {
     register_failing_record_codec();
     const auto target_path =
-        (std::filesystem::temp_directory_path() / "takt_replay_move_assign_failure.bin")
+        (std::filesystem::current_path() / "takt_replay_move_assign_failure.bin")
             .string();
     const auto source_path =
-        (std::filesystem::temp_directory_path() /
+        (std::filesystem::current_path() /
          "takt_replay_move_assign_failure_source.bin")
             .string();
     {
@@ -616,10 +656,12 @@ TEST(PipeTests, ScopedReplayMoveAssignmentFailurePreservesSource)
     }
 
     {
-        takt::Pipe<FailingRecordPayload> target_pipe("replay-move-failure-target", 2,
-                                                     FailingRecordPayload{});
-        takt::Pipe<FailingRecordPayload> source_pipe("replay-move-failure-source", 2,
-                                                     FailingRecordPayload{});
+        takt::Pipe<FailingRecordPayload> target_pipe("replay-move-failure-target");
+        takt::Pipe<FailingRecordPayload> source_pipe("replay-move-failure-source");
+        configure_pipe(target_pipe, 2, FailingRecordPayload{});
+        configure_pipe(source_pipe, 2, FailingRecordPayload{});
+        target_pipe.initialize();
+        source_pipe.initialize();
         auto target =
             takt::recordreplay::make_scoped_replay(target_pipe, target_path);
         auto source =
@@ -665,11 +707,13 @@ TEST(PipeTests, ScopedRecordAndReplayAreMoveOnly)
 TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
 {
     const auto file_path =
-        (std::filesystem::temp_directory_path() / "takt_record_replay_scoped_move.bin")
+        (std::filesystem::current_path() / "takt_record_replay_scoped_move.bin")
             .string();
 
     {
-        takt::Pipe<int> record_pipe("record-scoped-move", 8, 0);
+        takt::Pipe<int> record_pipe("record-scoped-move");
+        configure_pipe(record_pipe, 8, 0);
+        record_pipe.initialize();
         auto record =
             takt::recordreplay::make_scoped_record(record_pipe, file_path);
         EXPECT_TRUE(record.active());
@@ -692,7 +736,9 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
     }
 
     {
-        takt::Pipe<int> replay_pipe("replay-scoped-move", 8, 0);
+        takt::Pipe<int> replay_pipe("replay-scoped-move");
+        configure_pipe(replay_pipe, 8, 0);
+        replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
         EXPECT_TRUE(replay.active());
@@ -726,7 +772,9 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
 
 TEST(PipeTests, LaterPublishedWriteDoesNotBypassEarlierUnpublishedWrite)
 {
-    takt::Pipe<int> pipe("ordered-visibility", 4, 0);
+    takt::Pipe<int> pipe("ordered-visibility");
+    configure_pipe(pipe, 4, 0);
+    pipe.initialize();
 
     {
         auto first = pipe.acquire_write(false);
@@ -745,7 +793,9 @@ TEST(PipeTests, LaterPublishedWriteDoesNotBypassEarlierUnpublishedWrite)
 
 TEST(PipeTests, EarlierUnpublishedWritePreventsFutureWriteAcquisition)
 {
-    takt::Pipe<int> pipe("ordered-failure", 4, 0);
+    takt::Pipe<int> pipe("ordered-failure");
+    configure_pipe(pipe, 4, 0);
+    pipe.initialize();
 
     {
         auto first = pipe.acquire_write(false);
@@ -765,7 +815,9 @@ TEST(PipeTests, WriteBlocksWhenFullUntilReadReleasesSpace)
 {
     using namespace std::chrono_literals;
 
-    takt::Pipe<int> pipe("write-blocking", 2, 0);
+    takt::Pipe<int> pipe("write-blocking");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
     {
         auto w = pipe.acquire_write_batch(2, true);
         w.value(0) = 1;
@@ -796,7 +848,9 @@ TEST(PipeTests, ReadBlocksWhenEmptyUntilWritePublishes)
 {
     using namespace std::chrono_literals;
 
-    takt::Pipe<int> pipe("read-blocking", 2, 0);
+    takt::Pipe<int> pipe("read-blocking");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
 
     auto reader = std::async(std::launch::async,
                              [&pipe]
@@ -820,7 +874,9 @@ TEST(PipeTests, ReadBlocksWhenEmptyUntilWritePublishes)
 
 TEST(PipeTests, CloseReadSignalIsIdempotent)
 {
-    takt::Pipe<int> pipe("close-idempotent", 2, 0);
+    takt::Pipe<int> pipe("close-idempotent");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
     pipe.close();
 
     for (int i = 0; i < 3; ++i)
@@ -835,7 +891,9 @@ TEST(PipeTests, ConcurrentWritersReadersPreserveDataIntegrity)
     constexpr int kWriters = 4;
     constexpr int kReaders = 6;
 
-    takt::Pipe<int> pipe("concurrent-integrity", 64, 0);
+    takt::Pipe<int> pipe("concurrent-integrity");
+    configure_pipe(pipe, 64, 0);
+    pipe.initialize();
     std::atomic<int> next_value{0};
     std::atomic<int> alive_writers{kWriters};
 
@@ -922,7 +980,9 @@ TEST(PipeTests, HighConcurrencyStressNoLossNoDuplication)
     constexpr int kWriters = 12;
     constexpr int kReaders = 16;
 
-    takt::Pipe<int> pipe("high-concurrency-stress", 256, 0);
+    takt::Pipe<int> pipe("high-concurrency-stress");
+    configure_pipe(pipe, 256, 0);
+    pipe.initialize();
     std::atomic<int> next_value{0};
     std::atomic<int> alive_writers{kWriters};
 

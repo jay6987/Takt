@@ -139,10 +139,6 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
     {
         throw std::invalid_argument("read size cannot be zero");
     }
-    if (read_size > capacity_)
-    {
-        throw std::invalid_argument("read size cannot exceed pipe capacity");
-    }
     if (overlap_size >= read_size)
     {
         throw std::invalid_argument("overlap size must be smaller than read size");
@@ -169,6 +165,12 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
     };
 
     std::unique_lock<std::mutex> lk(mutex_);
+    const size_t retained_overlap =
+        std::min(overlap_size, read_reserve_pos_ - read_segment_start_pos_);
+    if (read_size - retained_overlap > capacity_)
+    {
+        throw std::invalid_argument("new read slots cannot exceed pipe capacity");
+    }
     cv_.wait(
         lk,
         [this, read_size, overlap_size, stride, &calc_read_end]

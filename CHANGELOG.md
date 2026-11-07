@@ -7,6 +7,10 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Explicit `PipeBase` preparation, `ProducerConfig`, `ConsumerConfig`, capacity
+  policy requests and configured-batch acquisition APIs.
+- `PipelineRuntime::initialize()` prepares endpoint pipes and nested runtimes;
+  directly constructed runtimes may receive an explicit pipe collection.
 - Scoped `PipelineBuilder::create(name)` creates independent state without retaining
   bound nodes and payload storage in the named registry.
 - `PipelineBuilder::graph()` and `to_dot()` export topology without running workers.
@@ -18,6 +22,20 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- **Breaking:** pipes are constructed with a name only, wired/configured on one
+  stable object, and explicitly initialized before acquisition. Runtime `start()`
+  requires prior `initialize()`. Configuration freezes after initialization.
+- Default capacity is the larger endpoint slot demand; max-concurrency requests
+  use their sum. Explicit positive capacities override both without a concurrency
+  or batch lower bound, and unused capacity demand is not calculated.
+- Examples, installed-package consumer and tests use the explicit lifecycle;
+  the C++17 requirement is unchanged.
+- Installed upgrades require a fresh prefix or removal of the obsolete
+  `include/takt/pipeline/builder.h`; directory installation does not prune
+  old headers. The clean-prefix smoke consumer rejects a stale builder header.
+- Runtime stop closes registered pipes and is terminal; stopping before
+  initialization cancels uninitialized pipes and prevents later initialize/start.
+  `PipeBase` implementations must provide `close()` for runtime cancellation.
 - Typed subgraph bridges retain read/write tokens and swap basket storage rather than copying through `std::any`.
 - Endpoint implementations must provide `close_with_error`; vector bridges exchange reusable storage ownership.
 - `fault_message()` returns a synchronized string snapshot instead of an unsynchronized reference.
@@ -31,6 +49,13 @@ This project follows Semantic Versioning.
 - Ordinary nontrivial payloads no longer require a codec when record/replay is disabled.
 - Replay failure releases the reserved read slots before rethrowing.
 - Consecutive read reservations now advance past segment markers held by earlier active tokens.
+
+### Removed
+- **Breaking:** `PipeBuilder` and its header/implementation, and immediately
+  initialized Pipe constructors. Replace them with one shared `Pipe<T>("name")`,
+  `set_producer(config, template)`, `set_consumer(config)` and explicit standalone
+  or runtime initialization. No compatibility shim or global pipe-name registry
+  is retained.
 
 ## [0.2.0] - 2026-10-31
 

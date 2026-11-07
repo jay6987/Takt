@@ -43,7 +43,22 @@ outer.add_output_port(
 outer.bind_subgraph("sg", inner,
                     {{"raw", {"worker", "in"}}},
                     {{"result", {"worker", "out"}}});
+
+auto runtime = outer.build_runtime();
+runtime->initialize();
+runtime->start();
+runtime->join();
 ```
+
+Create each pipe with a name-only constructor and configure both ends before
+preparation (see [Quick Start](quickstart.md)). Count the input/output bridges as
+participants when declaring each pipe's concurrency demand. Binding a subgraph
+retains the same endpoint pipe objects; runtime initialization traverses nested
+runtimes and deduplicates shared connections by object identity, not name.
+It does not swap pipes during preparation. Do not close or fault an input before
+runtime initialization. If starting `SubgraphNode` directly, construct it first
+so its bridges register their pipes, then initialize its internal
+`PipelineRuntime` before calling `start()`.
 
 ## Required Descriptor
 

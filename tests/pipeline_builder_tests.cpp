@@ -1,4 +1,5 @@
 #include "takt/takt.h"
+#include "pipe_test_support.h"
 
 #include <atomic>
 #include <memory>
@@ -303,6 +304,7 @@ TEST(PipelineBuilderTests, RuntimeStartsAndJoinsBoundNodes)
     builder.bind_node("b", std::make_shared<ProbeNode>(run_count));
 
     auto runtime = builder.build_runtime();
+    runtime->initialize();
     runtime->start();
     runtime->join();
 
@@ -324,6 +326,7 @@ TEST(PipelineBuilderTests, BindSubgraphBuildsCompositeNode)
     outer.bind_subgraph("subgraph-entry", inner);
 
     auto runtime = outer.build_runtime();
+    runtime->initialize();
     runtime->start();
     runtime->join();
 
@@ -332,10 +335,10 @@ TEST(PipelineBuilderTests, BindSubgraphBuildsCompositeNode)
 
 TEST(PipelineBuilderTests, BindSubgraphWithPortMappingsStoresMappings)
 {
-    auto outer_in = std::make_shared<takt::Pipe<int>>("mapped-outer-in", 8, 0);
-    auto outer_out = std::make_shared<takt::Pipe<int>>("mapped-outer-out", 8, 0);
-    auto inner_in = std::make_shared<takt::Pipe<int>>("mapped-inner-in", 8, 0);
-    auto inner_out = std::make_shared<takt::Pipe<int>>("mapped-inner-out", 8, 0);
+    auto outer_in = make_configured_pipe("mapped-outer-in", 8, 0);
+    auto outer_out = make_configured_pipe("mapped-outer-out", 8, 0);
+    auto inner_in = make_configured_pipe("mapped-inner-in", 8, 0);
+    auto inner_out = make_configured_pipe("mapped-inner-out", 8, 0);
 
     auto inner = takt::PipelineBuilder::declare("graph-inner-mapped");
     inner.add_node("entry");
@@ -387,10 +390,10 @@ TEST(PipelineBuilderTests, BindSubgraphRejectsMissingRequiredMapping)
 
 TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
 {
-    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in", 16, 0);
-    auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out", 16, 0);
-    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in", 16, 0);
-    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out", 16, 0);
+    auto outer_in = make_configured_pipe("outer-in", 16, 0);
+    auto outer_out = make_configured_pipe("outer-out", 16, 0);
+    auto inner_in = make_configured_pipe("inner-in", 16, 0);
+    auto inner_out = make_configured_pipe("inner-out", 16, 0);
 
     auto inner = takt::PipelineBuilder::declare("graph-inner-bridge");
     inner.add_node("worker");
@@ -411,6 +414,7 @@ TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
                         {{"result", {"worker", "out"}}});
 
     auto runtime = outer.build_runtime();
+    runtime->initialize();
     runtime->start();
 
     for (int i = 1; i <= 4; ++i)
@@ -446,7 +450,8 @@ TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
 
 TEST(PipelineBuilderTests, PipeEndpointWriteReportsTypeMismatch)
 {
-    auto pipe = std::make_shared<takt::Pipe<int>>("type-mismatch", 4, 0);
+    auto pipe = make_configured_pipe("type-mismatch", 4, 0);
+    pipe->initialize();
     auto endpoint = takt::make_pipe_endpoint<int>(pipe);
 
     takt::AnyPipePacket packet;
@@ -472,9 +477,8 @@ TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
     auto logger = std::make_shared<CapturingLogger>();
     takt::set_logger(logger);
 
-    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in-mismatch", 8, 0);
-    auto inner_in = std::make_shared<takt::Pipe<std::string>>("inner-in-mismatch", 8,
-                                                              std::string());
+    auto outer_in = make_configured_pipe("outer-in-mismatch", 8, 0);
+    auto inner_in = make_configured_pipe("inner-in-mismatch", 8, std::string());
 
     auto inner = takt::PipelineBuilder::declare("graph-inner-bridge-mismatch");
     inner.add_node("sink");
@@ -491,6 +495,9 @@ TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
     outer.bind_subgraph("sg", inner, {{"raw", {"sink", "in"}}}, {});
 
     auto runtime = outer.build_runtime();
+    ASSERT_NO_THROW(runtime->initialize());
+    EXPECT_TRUE(outer_in->initialized());
+    EXPECT_TRUE(inner_in->initialized());
     runtime->start();
 
     {
@@ -510,10 +517,10 @@ TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
 
 TEST(PipelineBuilderTests, SubgraphLifecycleRequestStopJoinNoDeadlock)
 {
-    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in-lifecycle", 64, 0);
-    auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out-lifecycle", 64, 0);
-    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in-lifecycle", 64, 0);
-    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out-lifecycle", 64, 0);
+    auto outer_in = make_configured_pipe("outer-in-lifecycle", 64, 0);
+    auto outer_out = make_configured_pipe("outer-out-lifecycle", 64, 0);
+    auto inner_in = make_configured_pipe("inner-in-lifecycle", 64, 0);
+    auto inner_out = make_configured_pipe("inner-out-lifecycle", 64, 0);
 
     auto inner = takt::PipelineBuilder::declare("graph-inner-lifecycle");
     inner.add_node("worker");
@@ -534,6 +541,7 @@ TEST(PipelineBuilderTests, SubgraphLifecycleRequestStopJoinNoDeadlock)
                         {{"result", {"worker", "out"}}});
 
     auto runtime = outer.build_runtime();
+    runtime->initialize();
     runtime->start();
 
     std::atomic<bool> stop_writer{false};

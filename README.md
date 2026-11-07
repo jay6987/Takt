@@ -7,7 +7,8 @@ Current implementation status:
 - Logger extension point is available via `takt::ILogger` and `takt::set_logger()`.
 - Native pipeline headers are available under `include/takt/pipeline/`.
 - Official node worker base is `Node`.
-- `Pipe<T>` supports fixed-capacity preallocation, blocking backpressure, batch read/write tokens, and overlap-window reads.
+- `Pipe<T>` has explicit configuration/initialization, fixed-capacity preallocation,
+  blocking backpressure, batch read/write tokens, and overlap-window reads.
 - Node execution is task-driven with a built-in ingress manager and worker pool: users implement `build_task(sequence_id)` and `process_task(worker_index, task)`.
 - Structured exception context is available through `NodeExceptionContext` and default logs include stage/pipe/worker metadata.
 - Record/replay bindings use move-only scoped guards with checked explicit cleanup.
@@ -53,6 +54,13 @@ cmake --build build --parallel
 cmake --install build --prefix /path/to/install
 ```
 
+For this breaking lifecycle upgrade, use a fresh install prefix, or remove only
+the obsolete `include/takt/pipeline/builder.h` from your existing Takt prefix
+before installing. CMake's directory installation copies current headers but
+does not prune removed headers from previous versions. Do not retain the old
+header as a compatibility API. The installed-package smoke test uses a clean
+prefix and rejects any discoverable `takt/pipeline/builder.h`.
+
 Then find and link the exported target from another CMake project:
 
 ```cmake
@@ -91,11 +99,38 @@ registry. Stop and join running nodes before releasing their dependencies.
 
 ## Pipe Model
 
+- Construct `Pipe<T>("name")`, configure producer/template and consumer on that
+  same object, then initialize. Names are labels and do not share connections.
+- `PipelineRuntime::initialize()` prepares bound endpoint pipes and nested
+  runtimes; call it before `start()`. Direct runtimes can receive explicit pipes.
 - Single element: `acquire_write(is_segment_end)` / `acquire_read()`.
 - Batch element: `acquire_write_batch(count, is_segment_end)` / `acquire_read_batch(read_size, overlap_size)`.
+- Configured batch: `acquire_configured_write_batch(is_segment_end)` /
+  `acquire_configured_read_batch()`. Scalar APIs never adopt batch defaults.
 - Write/read tokens expose `is_segment_start()` and `is_segment_end()` metadata.
 - Read batches are segment-bounded and never cross committed segment ends.
 - `PipeClosedAndEmptySignal` is used for graceful pipeline termination.
+
+### Breaking lifecycle migration
+
+`PipeBuilder` and constructors taking capacity/template are removed, not
+deprecated compatibility wrappers. This applies equally to checkout and
+installed-package consumers:
+
+```cpp
+auto frames = std::make_shared<takt::Pipe<std::vector<float>>>("frames");
+frames->set_producer({"source", 1, 1}, std::vector<float>(1024));
+frames->set_consumer({"sink", 1, 1, 0});
+frames->set_capacity(2); // optional positive override, no concurrency lower bound
+frames->set_read_history_policy(takt::ReadHistoryPolicy::Disabled);
+frames->initialize(); // standalone; a bound runtime can prepare it instead
+```
+
+Without an explicit capacity, the default satisfies the larger endpoint slot
+demand; `request_max_concurrency()` requests their sum. Finish configuration
+before initialization and initialize before any prefill/close. See
+[Pipe Usage](docs/pipe-usage.md) for formulas, configured batches, and runtime
+preparation. The library still requires C++17.
 
 ## Logger Injection
 

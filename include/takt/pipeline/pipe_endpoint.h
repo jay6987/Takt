@@ -39,6 +39,7 @@ class AnyPipeEndpoint
         target.write(read());
     }
     virtual std::string debug_name() const = 0;
+    virtual std::shared_ptr<PipeBase> lifecycle_pipe() const = 0;
 };
 
 template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
@@ -106,9 +107,9 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
         auto read_token = pipe_->acquire_mutable_read();
         if (!typed_target)
         {
-            throw PipeEndpointTypeMismatchError("pipe endpoint type mismatch: " +
-                                                debug_name() + " -> " +
-                                                target.debug_name());
+            throw PipeEndpointTypeMismatchError(
+                "pipe endpoint type mismatch: " + debug_name() + " -> " +
+                target.debug_name());
         }
         auto write_token =
             typed_target->pipe_->acquire_write(read_token.is_segment_end());
@@ -120,6 +121,11 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
     std::string debug_name() const override
     {
         return pipe_->name();
+    }
+
+    std::shared_ptr<PipeBase> lifecycle_pipe() const override
+    {
+        return pipe_;
     }
 
   private:

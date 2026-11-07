@@ -56,10 +56,22 @@ class DoubleNode final : public takt::Node
 
 int main()
 {
-    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in", 16, 0);
-    auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out", 16, 0);
-    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in", 16, 0);
-    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out", 16, 0);
+    auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in");
+    outer_in->set_producer({"source", 1, 1}, 0);
+    outer_in->set_consumer({"input-bridge", 1, 1, 0});
+    auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out");
+    outer_out->set_producer({"output-bridge", 1, 1}, 0);
+    outer_out->set_consumer({"sink", 1, 1, 0});
+    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in");
+    inner_in->set_producer({"input-bridge", 1, 1}, 0);
+    inner_in->set_consumer({"double", 1, 1, 0});
+    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out");
+    inner_out->set_producer({"double", 1, 1}, 0);
+    inner_out->set_consumer({"output-bridge", 1, 1, 0});
+    for (const auto& pipe : {outer_in, outer_out, inner_in, inner_out})
+    {
+        pipe->set_capacity(16);
+    }
 
     auto inner = takt::PipelineBuilder::declare("inner");
     inner.add_node("worker");
@@ -79,6 +91,7 @@ int main()
                         {{"result", {"worker", "out"}}});
 
     auto runtime = outer.build_runtime();
+    runtime->initialize();
     runtime->start();
 
     for (int i = 1; i <= 4; ++i)

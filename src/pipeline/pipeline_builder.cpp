@@ -526,8 +526,10 @@ PipelineBuilder& PipelineBuilder::bind_subgraph(
     }
 
     auto topology = subgraph_builder.graph();
-    topology.input_mappings.insert(input_port_mappings.begin(), input_port_mappings.end());
-    topology.output_mappings.insert(output_port_mappings.begin(), output_port_mappings.end());
+    topology.input_mappings.insert(input_port_mappings.begin(),
+                                   input_port_mappings.end());
+    topology.output_mappings.insert(output_port_mappings.begin(),
+                                    output_port_mappings.end());
     std::lock_guard<std::mutex> lk(state_->mutex);
     state_->bound_nodes[node_name] = std::make_shared<SubgraphNode>(
         node_name, std::move(subgraph_runtime), std::move(input_port_mappings),
@@ -587,9 +589,25 @@ std::shared_ptr<PipelineRuntime> PipelineBuilder::build_runtime() const
     validate_locked(*state_);
 
     std::vector<std::shared_ptr<NodeBase>> ordered_nodes;
+    std::vector<std::shared_ptr<PipeBase>> pipes;
     ordered_nodes.reserve(state_->nodes.size());
     for (const auto& node_spec : state_->nodes)
     {
+        const auto collect_pipes = [&pipes](const std::vector<PortSpec>& ports)
+        {
+            for (const auto& port : ports)
+            {
+                if (port.descriptor.find("pipe_endpoint") == port.descriptor.end())
+                    continue;
+                const auto endpoint = require_pipe_endpoint_from_port(port, "runtime");
+                auto pipe = endpoint->lifecycle_pipe();
+                if (!pipe)
+                    throw std::logic_error("runtime endpoint pipe cannot be null");
+                pipes.push_back(std::move(pipe));
+            }
+        };
+        collect_pipes(node_spec.input_ports);
+        collect_pipes(node_spec.output_ports);
         auto it = state_->bound_nodes.find(node_spec.name);
         if (it == state_->bound_nodes.end() || !it->second)
         {
@@ -626,7 +644,8 @@ std::shared_ptr<PipelineRuntime> PipelineBuilder::build_runtime() const
         ordered_nodes.push_back(node);
     }
 
-    return std::make_shared<PipelineRuntime>(std::move(ordered_nodes));
+    return std::make_shared<PipelineRuntime>(std::move(ordered_nodes),
+                                             std::move(pipes));
 }
 
 void PipelineBuilder::validate() const

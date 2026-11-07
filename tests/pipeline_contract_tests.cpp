@@ -1,4 +1,5 @@
 #include "takt/takt.h"
+#include "pipe_test_support.h"
 
 #include <gtest/gtest.h>
 
@@ -134,8 +135,9 @@ class BlockedNode final : public takt::Node
 
 TEST(PipelineContracts, DisabledHistoryDoesNotCopyPayloadAtReadRelease)
 {
-    takt::Pipe<CopyProbe> pipe("no-history", 1, {}, {},
-                               takt::ReadHistoryPolicy::Disabled);
+    takt::Pipe<CopyProbe> pipe("no-history");
+    configure_pipe(pipe, 1, CopyProbe{}, takt::ReadHistoryPolicy::Disabled);
+    pipe.initialize();
     CopyProbe::copies = 0;
     {
         auto write = pipe.acquire_write();
@@ -169,7 +171,9 @@ TEST(PipelineContracts, UnregisteredBuildersAreIndependentAndReleaseBoundNodes)
 
 TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
 {
-    takt::Pipe<int> pipe("pending", 1, 0);
+    takt::Pipe<int> pipe("pending");
+    configure_pipe(pipe, 1, 0);
+    pipe.initialize();
     std::optional<takt::Pipe<int>::WriteToken> write(pipe.acquire_write());
     pipe.close();
     auto reader = std::async(std::launch::async,
@@ -188,7 +192,9 @@ TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
 
 TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveSegments)
 {
-    takt::Pipe<int> pipe("retained-reads", 2, 0);
+    takt::Pipe<int> pipe("retained-reads");
+    configure_pipe(pipe, 2, 0);
+    pipe.initialize();
     for (int value : {1, 2})
     {
         auto write = pipe.acquire_write();
@@ -211,7 +217,9 @@ TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveSegments)
 
 TEST(PipelineContracts, ErrorClosureDrainsUnterminatedPrefixAndPendingWrites)
 {
-    takt::Pipe<int> pipe("error-prefix", 3, 0);
+    takt::Pipe<int> pipe("error-prefix");
+    configure_pipe(pipe, 3, 0);
+    pipe.initialize();
     {
         auto write = pipe.acquire_write(false);
         write.value() = 1;
@@ -243,7 +251,9 @@ TEST(PipelineContracts, ErrorClosureDrainsUnterminatedPrefixAndPendingWrites)
 
 TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
 {
-    takt::Pipe<int> pipe("gap", 3, 0);
+    takt::Pipe<int> pipe("gap");
+    configure_pipe(pipe, 3, 0);
+    pipe.initialize();
     std::optional<takt::Pipe<int>::WriteToken> first(pipe.acquire_write(false));
     std::optional<takt::Pipe<int>::WriteToken> failed(pipe.acquire_write(false));
     std::optional<takt::Pipe<int>::WriteToken> last(pipe.acquire_write(true));
@@ -264,12 +274,12 @@ TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
 
 TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
 {
-    auto input =
-        std::make_shared<FramePipe>("bridge-in", 1, Frame(16), takt::PipeDescriptor{},
-                                    takt::ReadHistoryPolicy::Disabled);
-    auto output =
-        std::make_shared<FramePipe>("bridge-out", 1, Frame(16), takt::PipeDescriptor{},
-                                    takt::ReadHistoryPolicy::Disabled);
+    auto input = make_configured_pipe("bridge-in", 1, Frame(16),
+                                      takt::ReadHistoryPolicy::Disabled);
+    auto output = make_configured_pipe("bridge-out", 1, Frame(16),
+                                       takt::ReadHistoryPolicy::Disabled);
+    input->initialize();
+    output->initialize();
     const float* original = nullptr;
     {
         auto write = input->acquire_write();
@@ -291,7 +301,7 @@ TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
         write.publish();
     }
     auto mismatch =
-        takt::make_pipe_endpoint(std::make_shared<takt::Pipe<double>>("other", 1));
+        takt::make_pipe_endpoint(std::make_shared<takt::Pipe<double>>("other"));
     EXPECT_THROW(source->transfer_to(*mismatch), takt::PipeEndpointTypeMismatchError);
     source->close_with_error("bridge fault");
     EXPECT_THROW(source->transfer_to(*target), takt::PipeFaultedError);
@@ -317,12 +327,15 @@ TEST(PipelineContracts, TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
 {
     for (bool failure : {false, true})
     {
-        FramePipe input("frames-in", 2, Frame(16), {},
-                        takt::ReadHistoryPolicy::Disabled);
-        FramePipe output("frames-out", 2, Frame(16), {},
-                         takt::ReadHistoryPolicy::Disabled);
+        FramePipe input("frames-in");
+        FramePipe output("frames-out");
+        configure_pipe(input, 2, Frame(16), takt::ReadHistoryPolicy::Disabled);
+        configure_pipe(output, 2, Frame(16), takt::ReadHistoryPolicy::Disabled);
+        input.initialize();
+        output.initialize();
         auto node = std::make_shared<FrameNode>(input, output, failure);
         takt::PipelineRuntime runtime({node});
+        runtime.initialize();
         runtime.start();
         auto producer = std::async(std::launch::async,
                                    [&input]

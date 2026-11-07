@@ -122,10 +122,10 @@ TEST(Graphviz, BoundSubgraphSnapshotMatchesBindingAndRebindingClearsIt)
 
 TEST(Graphviz, BuilderRetainsBoundPortMappingsInExport)
 {
-    auto outer_input = std::make_shared<takt::Pipe<int>>("dot-outer-in", 1);
-    auto outer_output = std::make_shared<takt::Pipe<int>>("dot-outer-out", 1);
-    auto inner_input = std::make_shared<takt::Pipe<int>>("dot-inner-in", 1);
-    auto inner_output = std::make_shared<takt::Pipe<int>>("dot-inner-out", 1);
+    auto outer_input = std::make_shared<takt::Pipe<int>>("dot-outer-in");
+    auto outer_output = std::make_shared<takt::Pipe<int>>("dot-outer-out");
+    auto inner_input = std::make_shared<takt::Pipe<int>>("dot-inner-in");
+    auto inner_output = std::make_shared<takt::Pipe<int>>("dot-inner-out");
     auto inner = takt::PipelineBuilder::declare("dot-mapped-inner");
     inner.add_node("worker")
         .add_input_port("worker", "input",

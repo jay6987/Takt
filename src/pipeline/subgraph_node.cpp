@@ -41,10 +41,22 @@ SubgraphNode::SubgraphNode(
                                std::to_string(expected_bridge_count) +
                                " actual=" + std::to_string(bridge_links_.size()));
     }
+    for (const auto& link : bridge_links_)
+    {
+        runtime_->add_pipe(link.source->lifecycle_pipe());
+        runtime_->add_pipe(link.target->lifecycle_pipe());
+    }
+}
+
+std::vector<std::shared_ptr<PipelineRuntime>> SubgraphNode::child_runtimes() const
+{
+    return {runtime_};
 }
 
 void SubgraphNode::start()
 {
+    if (!runtime_->initialized())
+        throw std::logic_error("subgraph runtime must be initialized before start");
     bridge_stop_requested_.store(false);
     {
         std::lock_guard<std::mutex> lk(bridge_error_mutex_);
@@ -53,13 +65,33 @@ void SubgraphNode::start()
     }
     bridge_workers_.clear();
     bridge_workers_.reserve(bridge_links_.size());
-    for (size_t i = 0; i < bridge_links_.size(); ++i)
+    try
     {
-        bridge_workers_.emplace_back(
-            std::async(std::launch::async, [this, i] { run_bridge(i); }));
+        for (size_t i = 0; i < bridge_links_.size(); ++i)
+        {
+            bridge_workers_.emplace_back(
+                std::async(std::launch::async, [this, i] { run_bridge(i); }));
+        }
+        runtime_->start();
     }
-
-    runtime_->start();
+    catch (...)
+    {
+        const auto failure = std::current_exception();
+        request_stop();
+        try
+        {
+            join();
+        }
+        catch (const std::exception& cleanup)
+        {
+            error(std::string("subgraph startup cleanup failed: ") + cleanup.what());
+        }
+        catch (...)
+        {
+            error("subgraph startup cleanup failed: unknown exception");
+        }
+        std::rethrow_exception(failure);
+    }
 }
 
 void SubgraphNode::join()

@@ -2,11 +2,56 @@
 
 ## Mental Model
 
-A `Pipe<T>` is a fixed-capacity, preallocated circular belt.
+A `Pipe<T>` is a stable connection object that becomes a fixed-capacity,
+preallocated circular belt only after explicit initialization.
 
-- Capacity is fixed at construction.
+- Construction stores the name but allocates no runtime baskets.
+- Both ends configure the same object; equal names do not share state.
+- Capacity, typed producer template, descriptors and history policy are
+  configured before initialization. Capacity is fixed once initialized.
 - Baskets are reused, not dynamically allocated per transfer.
 - Writers and readers are blocked by condition variables.
+
+## Preparation Lifecycle
+
+```text
+Configuring --initialize()--> Ready --close()--> Closed
+                                   --close_with_error()--> Faulted
+Configuring --close()/close_with_error()--> Cancelled
+```
+
+Both producer and consumer declarations are mandatory. Repeating either
+declaration throws; initialization freezes all configuration. Repeating
+`initialize()` throws rather than replacing resources. Initialization has a
+strong exception guarantee: failed allocation/copy/validation leaves the
+configuration intact and no partial runtime; it can be corrected and retried.
+The producer template is available via `basket_template()` during configuration,
+without consulting a runtime basket. Producer/consumer config and descriptor
+queries remain available after initialization.
+
+Before initialization, `size()` is zero, `closed()` and `faulted()` are false,
+and `fault_message()` is empty unless cancelled/faulted explicitly. `capacity()`
+returns the explicit capacity when set, otherwise resolves the two configured
+ends or throws for missing configuration/overflow. Every acquisition entry
+point throws before initialization instead of blocking.
+
+Configuration-time `close()` safely cancels without allocating baskets;
+`close_with_error(message)` also preserves the first nonempty failure.
+Empty error messages are rejected. Cancellation prevents further configuration
+and initialization and does not turn uninitialized reads into normal EOF.
+An uninitialized pipe can be destroyed safely.
+
+`PipelineRuntime::initialize()` prepares all collected connection objects and
+nested runtimes before any workers start. `start()` requires preparation; it
+never initializes implicitly. Configure/initialize before any prefill or close.
+See [Pipe Usage](pipe-usage.md) for capacity formulas and API migration.
+
+`PipelineRuntime::request_stop()` closes its registered pipes as well as stopping
+nodes and nested runtimes, even when a node has no pipe-closing override.
+Stopping a nonfailed runtime makes it terminal (`Stopped`): later initialization
+or start is rejected. Stopping before initialization cancels uninitialized
+registered pipes without allocating baskets. Cleanup via repeated stop/join
+remains safe; a failed runtime preserves its original failure.
 
 ## States
 
@@ -20,6 +65,7 @@ A `Pipe<T>` is a fixed-capacity, preallocated circular belt.
 
 - `acquire_write(is_segment_end)` acquires one basket and marks whether this token ends a segment.
 - `acquire_write_batch(count, is_segment_end)` acquires contiguous logical write work in one token.
+- `acquire_configured_write_batch(is_segment_end)` uses the producer's `write_size`.
 - `publish()` marks the token as committed, but read visibility still follows acquire order.
 - A later published token does not become visible until all earlier write tokens are released and published.
 - A published write token that remains alive still holds capacity and does not complete visibility progression until it is released.
@@ -32,6 +78,7 @@ A `Pipe<T>` is a fixed-capacity, preallocated circular belt.
 
 - `acquire_read()` acquires one readable element.
 - `acquire_read_batch(read_size, overlap_size)` supports sliding-window style consumption.
+- `acquire_configured_read_batch()` uses the consumer's configured window/overlap.
 - `overlap_size < read_size` must hold.
 - Overlap reads require one previous completed read batch.
 - Read windows are bounded by committed segment ends and do not cross segments.

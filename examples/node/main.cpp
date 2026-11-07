@@ -56,8 +56,16 @@ class DoubleNode final : public takt::Node
 
 int main()
 {
-    auto in = std::make_shared<takt::Pipe<int>>("node-in", 16, 0);
-    auto out = std::make_shared<takt::Pipe<int>>("node-out", 16, 0);
+    auto in = std::make_shared<takt::Pipe<int>>("node-in");
+    in->set_producer({"source", 1, 1}, 0);
+    in->set_consumer({"double", 1, 1, 0});
+    in->set_capacity(16);
+    auto out = std::make_shared<takt::Pipe<int>>("node-out");
+    out->set_producer({"double", 1, 1}, 0);
+    out->set_consumer({"sink", 1, 1, 0});
+    out->set_capacity(16);
+    in->initialize();
+    out->initialize();
 
     DoubleNode node(in, out);
     node.set_stage_name("double-stage");

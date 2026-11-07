@@ -1,6 +1,8 @@
 # PipeCore State Machine
 
 This page describes the runtime state transitions of the non-template scheduler core used by Pipe.
+`PipeCore` is created only by successful `Pipe::initialize()`. The configuration
+and cancellation phases live outside this diagram; see [Pipe Lifecycle](pipe-lifecycle.md).
 
 ## Core State Variables
 
@@ -80,4 +82,5 @@ stateDiagram-v2
 - Pipe acquire_write and acquire_write_batch reserve capacity through PipeCore
 - Pipe publish marks reserved writes as committed; visibility advances only through contiguous release order
 - Pipe acquire_read and acquire_read_batch consume readable data through PipeCore
-- Pipe close forwards directly to PipeCore close
+- Initialized Pipe close forwards to PipeCore close; configuration-time close
+  cancels preparation without constructing a core.

@@ -11,7 +11,8 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(takt_smoke_test
-    pipe_builder_tests.cpp
+    pipe_lifecycle_tests.cpp
+    runtime_initialization_tests.cpp
     pipeline_builder_tests.cpp
     pipe_tests.cpp
     node_tests.cpp

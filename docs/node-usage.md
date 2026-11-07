@@ -55,10 +55,16 @@ class DoubleNode final : public takt::Node
 
 ## Runtime Lifecycle
 
-- Construct node with input/output pipes.
+- Create name-only input/output pipes and share each connection with its two ends.
+- Configure each pipe's producer/template and consumer, plus optional capacity,
+  descriptor and history policy. Participant concurrency describes slot demand;
+  it is not required to equal a node's worker count.
+- Construct node with those same input/output pipes.
 - Choose worker count: default 1, or pass explicit count in constructor.
 - Optionally set metadata (`set_stage_name`, `add_input_port_name`, `add_output_port_name`).
-- Call `start()`:
+- Prepare bound pipelines with `runtime->initialize()` before `runtime->start()`.
+  If starting a node directly, explicitly initialize its standalone pipes first.
+- Call node `start()`:
   - manager thread repeatedly calls `build_task(sequence_id)`
   - worker threads repeatedly call `process_task(worker_index, task)`
 - Push data and close upstream input pipe.

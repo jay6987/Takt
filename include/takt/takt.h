@@ -3,7 +3,8 @@
 #include "takt/pipeline/graphviz.h"
 
 #include "takt/logging/logger.h"
-#include "takt/pipeline/builder.h"
+#include "takt/pipeline/pipe_base.h"
+#include "takt/pipeline/pipe_config.h"
 #include "takt/pipeline/channel.h"
 #include "takt/pipeline/node.h"
 #include "takt/pipeline/pipe.h"

@@ -44,13 +44,19 @@ void process_task(size_t, takt::Node::Task& task) override {
 
 ## Lifecycle
 
-1. Construct node
-2. Set optional metadata (`stage`, `input pipe`, `output pipe` names)
-3. `start()`:
+1. Create name-only pipes and construct nodes holding those same connection objects
+2. Configure both ends/template and optional pipe policies; set node metadata
+3. Initialize bound `PipelineRuntime` (including nested runtimes), or initialize
+   standalone pipes explicitly before directly starting nodes
+4. `start()`:
    - starts ingress manager thread
    - starts `worker_count` worker threads
-4. Upstream writes and then closes input pipe
-5. `join()`
+5. Upstream writes and then closes input pipe
+6. `join()`
+
+Runtime `start()` requires prior explicit `initialize()` and never allocates
+baskets implicitly. A directly started `SubgraphNode` likewise requires its
+internal runtime to be initialized before start.
 
 ## Important Design Choice
 
@@ -85,3 +91,9 @@ output does not cancel previously reserved write baskets. A stop override or
 external shutdown must close pipes to wake threads blocked in pipe acquisition;
 `Node::request_stop()` only wakes the internal task queue. Derived destructors
 must stop and join before destroying pipe references or worker scratch.
+
+`PipelineRuntime::request_stop()` additionally closes registered pipes and
+propagates stop through nested runtimes, so directly constructed runtimes should
+receive pipes that are not exposed through bound endpoints. Runtime stop is
+terminal: stopping before initialization cancels preparation and prevents later
+initialize/start. Direct node shutdown still needs explicit pipe closure.

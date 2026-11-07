@@ -1,4 +1,5 @@
 #include "takt/takt.h"
+#include "pipe_test_support.h"
 
 #include <atomic>
 #include <chrono>
@@ -456,8 +457,12 @@ class StoppableNode final : public takt::Node
 
 TEST(NodeTests, SingleWorkerNodePipeDriven)
 {
-    takt::Pipe<int> serial_in("serial-in", 8, 0);
-    takt::Pipe<int> serial_out("serial-out", 8, 0);
+    takt::Pipe<int> serial_in("serial-in");
+    takt::Pipe<int> serial_out("serial-out");
+    configure_pipe(serial_in, 8, 0);
+    configure_pipe(serial_out, 8, 0);
+    serial_in.initialize();
+    serial_out.initialize();
     SingleWorkerDoubleAgent serial_agent(serial_in, serial_out);
     serial_agent.start();
     for (int v = 1; v <= 3; ++v)
@@ -491,7 +496,9 @@ TEST(NodeTests, SingleWorkerNodePipeDriven)
 TEST(NodeTests, MultiWorkerNodePipeDriven)
 {
     std::atomic<int> parallel_sum{0};
-    takt::Pipe<int> parallel_in("parallel-in", 128, 0);
+    takt::Pipe<int> parallel_in("parallel-in");
+    configure_pipe(parallel_in, 128, 0);
+    parallel_in.initialize();
     MultiWorkerSumAgent parallel_agent(parallel_in, parallel_sum, 4);
     parallel_agent.start();
     for (int i = 0; i < 100; ++i)
@@ -615,8 +622,12 @@ TEST(NodeTests, MultiStageNodesReconstructOrderedOutput)
     const std::vector<size_t> shuffled_order = {2, 3,  8,  4, 0,  11, 5,  6, 7,
                                                 1, 12, 13, 9, 10, 15, 16, 14};
 
-    takt::Pipe<IndexedChar> in("ordered-in", 32, IndexedChar{});
-    takt::Pipe<char> out("ordered-out", 32, '\0');
+    takt::Pipe<IndexedChar> in("ordered-in");
+    takt::Pipe<char> out("ordered-out");
+    configure_pipe(in, 32, IndexedChar{});
+    configure_pipe(out, 32, '\0');
+    in.initialize();
+    out.initialize();
     OrderedCharStore store;
 
     IngressReorderAgent stage1(in, store);
@@ -664,6 +675,7 @@ TEST(NodeTests, SubgraphNodeStartsAndJoinsInnerRuntime)
         std::make_shared<takt::PipelineRuntime>(std::move(inner_nodes));
     takt::SubgraphNode subgraph("sg", inner_runtime);
 
+    inner_runtime->initialize();
     subgraph.start();
     subgraph.join();
 
@@ -683,6 +695,7 @@ TEST(NodeTests, SubgraphNodeRequestStopPropagatesToInnerRuntime)
         std::make_shared<takt::PipelineRuntime>(std::move(inner_nodes));
     takt::SubgraphNode subgraph("sg-stop", inner_runtime);
 
+    inner_runtime->initialize();
     subgraph.start();
     ASSERT_EQ(worker_started.wait_for(std::chrono::seconds(2)),
               std::future_status::ready);

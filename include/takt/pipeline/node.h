@@ -13,6 +13,8 @@
 
 namespace takt
 {
+class PipelineRuntime;
+
 struct NodeExceptionContext
 {
     std::string pipeline_name;
@@ -40,6 +42,10 @@ class NodeBase
 
     virtual void start() = 0;
     virtual void join() = 0;
+    virtual std::vector<std::shared_ptr<PipelineRuntime>> child_runtimes() const
+    {
+        return {};
+    }
 
     void set_stage_name(std::string stage_name);
     void set_pipeline_name(std::string pipeline_name);
