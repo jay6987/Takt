@@ -44,4 +44,18 @@ struct NodePortRef
     std::string node_name;
     std::string port_name;
 };
+
+enum class MappingTransport
+{
+    Unresolved,
+    Direct,
+    Bridge,
+};
+
+struct MappingTransportInfo
+{
+    MappingTransport mode = MappingTransport::Unresolved;
+    std::string source_pipe;
+    std::string target_pipe;
+};
 } // namespace takt

@@ -47,7 +47,12 @@ disappeared from the source tree. Reconfigure consumers against the new prefix;
 do not use an old PipeBuilder header from another include directory. The
 installed-package smoke consumer rejects the removed header if discoverable.
 
-## Subgraph Mapping (Runnable Pattern)
+## Subgraph Mapping (Wiring Template)
+
+Use one shared Pipe per Direct boundary. Only the real producer and consumer
+configure it; the subgraph does not add a participant or worker.
+Bind your compute node where indicated before creating the outer runtime.
+For a complete executable, see [Subgraph Usage](subgraph-usage.md#runnable-example).
 
 ```cpp
 #include "takt/takt.h"
@@ -55,17 +60,13 @@ installed-package smoke consumer rejects the removed header if discoverable.
 int main() {
     auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in");
     outer_in->set_producer({"source", 1, 1}, 0);
-    outer_in->set_consumer({"input-bridge", 1, 1, 0});
+    outer_in->set_consumer({"worker", 1, 1, 0});
     auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out");
-    outer_out->set_producer({"output-bridge", 1, 1}, 0);
+    outer_out->set_producer({"worker", 1, 1}, 0);
     outer_out->set_consumer({"sink", 1, 1, 0});
-    auto inner_in = std::make_shared<takt::Pipe<int>>("inner-in");
-    inner_in->set_producer({"input-bridge", 1, 1}, 0);
-    inner_in->set_consumer({"worker", 1, 1, 0});
-    auto inner_out = std::make_shared<takt::Pipe<int>>("inner-out");
-    inner_out->set_producer({"worker", 1, 1}, 0);
-    inner_out->set_consumer({"output-bridge", 1, 1, 0});
-    for (const auto& pipe : {outer_in, outer_out, inner_in, inner_out})
+    auto inner_in = outer_in;
+    auto inner_out = outer_out;
+    for (const auto& pipe : {outer_in, outer_out})
         pipe->set_capacity(16);
 
     auto inner = takt::PipelineBuilder::declare("inner");
@@ -108,6 +109,26 @@ int main() {
 }
 ```
 
+The two separately created endpoint wrappers for each boundary still resolve to
+Direct because their typed Pipe object is identical. Distinct pipes retain the
+Bridge path, even when named identically. If independent buffering is intentional,
+use separate inner/outer pipes and configure the bridge's roles on both sides.
+Custom endpoints default to Bridge; same-Pipe custom mappings must explicitly
+support Direct on both endpoints or binding fails.
+
+DOT export does not start or initialize workers:
+
+```cpp
+auto connections = outer.to_dot();
+auto interfaces = outer.to_dot({true, true, takt::DotView::Interfaces});
+auto collapsed = outer.to_dot({false, true});
+```
+
+Connections resolves Direct ports to compute-node connections; Interfaces keeps
+logical port ellipses. Bridges are explicit worker nodes in either expanded
+view. Descriptive mappings without mode metadata are dashed `unresolved`
+connections, not evidence of bridge execution.
+
 ## Troubleshooting
 
 - `pipe='...' ... configuration is missing` or `pipe is not initialized`:
@@ -124,6 +145,11 @@ int main() {
     - Cause: mapped source and target endpoints use different payload types.
     - Fix: align `Pipe<T>` types on both sides of the mapping.
 
-- `subgraph bridge failure source=... target=...`:
+- `endpoints do not support direct mapping of pipe='...'`:
+    - Cause: a same-Pipe pair includes endpoints that cannot safely bypass their operations.
+    - Fix: use typed wrappers or explicitly opt both custom endpoints into Direct
+      only when bypassing processing preserves semantics. Otherwise use distinct pipes.
+
+- `stop_reason='bridge_exception'`:
     - Cause: bridge read/write failed (type mismatch, closed endpoint, or other runtime error).
     - Fix: check mapping correctness, endpoint descriptors, and close-order semantics.

@@ -18,14 +18,14 @@ SubgraphNode::SubgraphNode(
     : NodeBase(std::move(node_name)), runtime_(std::move(runtime)),
       input_port_mappings_(std::move(input_port_mappings)),
       output_port_mappings_(std::move(output_port_mappings)),
-      bridge_links_(std::move(bridge_links))
+      mapping_links_(std::move(bridge_links))
 {
     if (!runtime_)
     {
         throw std::invalid_argument("subgraph runtime cannot be null");
     }
 
-    for (const auto& link : bridge_links_)
+    for (const auto& link : mapping_links_)
     {
         if (!link.source || !link.target)
         {
@@ -33,15 +33,21 @@ SubgraphNode::SubgraphNode(
         }
     }
 
-    const size_t expected_bridge_count =
+    const size_t expected_mapping_count =
         input_port_mappings_.size() + output_port_mappings_.size();
-    if (bridge_links_.size() != expected_bridge_count)
+    if (mapping_links_.size() != expected_mapping_count)
     {
-        throw std::logic_error("subgraph bridge link count mismatch: expected=" +
-                               std::to_string(expected_bridge_count) +
-                               " actual=" + std::to_string(bridge_links_.size()));
+        throw std::logic_error("subgraph mapping link count mismatch: expected=" +
+                               std::to_string(expected_mapping_count) +
+                               " actual=" + std::to_string(mapping_links_.size()));
     }
-    for (const auto& link : bridge_links_)
+    for (const auto& link : mapping_links_)
+    {
+        if (classify_mapping(*link.source, *link.target).mode ==
+            MappingTransport::Bridge)
+            bridge_links_.push_back(link);
+    }
+    for (const auto& link : mapping_links_)
     {
         runtime_->add_pipe(link.source->lifecycle_pipe());
         runtime_->add_pipe(link.target->lifecycle_pipe());
@@ -64,6 +70,7 @@ void SubgraphNode::start()
         bridge_error_message_.clear();
     }
     bridge_workers_.clear();
+    launched_bridge_workers_.store(0);
     bridge_workers_.reserve(bridge_links_.size());
     try
     {
@@ -71,6 +78,7 @@ void SubgraphNode::start()
         {
             bridge_workers_.emplace_back(
                 std::async(std::launch::async, [this, i] { run_bridge(i); }));
+            launched_bridge_workers_.fetch_add(1);
         }
         runtime_->start();
     }
@@ -140,7 +148,7 @@ void SubgraphNode::request_stop() noexcept
 {
     NodeBase::request_stop();
     bridge_stop_requested_.store(true);
-    for (const auto& link : bridge_links_)
+    for (const auto& link : mapping_links_)
     {
         link.source->close();
         link.target->close();

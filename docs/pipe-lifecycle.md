@@ -44,6 +44,10 @@ An uninitialized pipe can be destroyed safely.
 `PipelineRuntime::initialize()` prepares all collected connection objects and
 nested runtimes before any workers start. `start()` requires preparation; it
 never initializes implicitly. Configure/initialize before any prefill or close.
+Shared Direct subgraph boundaries refer to this same connection object; recursive
+preparation deduplicates it by identity, not name. Only the real compute producer
+and consumer configure it. Direct removes the additional bridge queue and its
+capacity; all boundary pipes remain registered for stop even without workers.
 See [Pipe Usage](pipe-usage.md) for capacity formulas and API migration.
 
 `PipelineRuntime::request_stop()` closes its registered pipes as well as stopping

@@ -84,6 +84,10 @@ tokens fault the affected pipes rather than publishing invalid output.
 `PipelineRuntime::join()` joins all nodes and then rethrows the first recorded
 failure; `Node::join()` alone remains a non-reporting synchronization operation.
 Subgraph join also finishes its bridge workers before reporting failure.
+Typed same-Pipe port mappings are Direct and launch no bridge workers.
+All mapped boundary pipes still participate in initialization and stop;
+real compute nodes must propagate errors and EOF on shared pipes just as on
+ordinary graph connections. Subgraph nesting does not replace these node duties.
 
 Pipe-owning nodes must close their bound input/output pipes with an explicit
 error from `on_exception`, and close output after ingress finishes. Closing

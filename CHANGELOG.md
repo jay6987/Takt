@@ -7,6 +7,10 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Direct subgraph mappings for compatible typed endpoints sharing one Pipe;
+  custom endpoints explicitly opt in through `supports_direct_to`.
+- Value-owned Direct/Bridge/Unresolved mapping transport metadata, local mapping
+  and bridge launch counts, and `DotView::Interfaces` for logical port inspection.
 - Explicit `PipeBase` preparation, `ProducerConfig`, `ConsumerConfig`, capacity
   policy requests and configured-batch acquisition APIs.
 - `PipelineRuntime::initialize()` prepares endpoint pipes and nested runtimes;
@@ -22,6 +26,12 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- Expanded DOT defaults to cross-cluster Direct connections and explicit Bridge
+  worker nodes; descriptive mappings without metadata remain Unresolved.
+  Collapsed subgraphs summarize local mapping modes.
+- Subgraph lifecycle registration and stop cover all mapped pipes independently
+  of bridge workers. Direct boundaries configure only real compute participants;
+  unsupported same-Pipe custom mappings fail before starting workers.
 - **Breaking:** pipes are constructed with a name only, wired/configured on one
   stable object, and explicitly initialized before acquisition. Runtime `start()`
   requires prior `initialize()`. Configuration freezes after initialization.

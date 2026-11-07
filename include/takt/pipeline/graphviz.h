@@ -8,10 +8,17 @@
 
 namespace takt
 {
+enum class DotView
+{
+    Connections,
+    Interfaces,
+};
+
 struct DotOptions
 {
     bool expand_subgraphs = true;
     bool left_to_right = true;
+    DotView view = DotView::Connections;
 };
 
 // Value-owned topology only: descriptors and runtime objects are not serialized.
@@ -23,6 +30,8 @@ struct PipelineGraph
     std::map<std::string, PipelineGraph> subgraphs;
     std::map<std::string, NodePortRef> input_mappings;
     std::map<std::string, NodePortRef> output_mappings;
+    std::map<std::string, MappingTransportInfo> input_transports;
+    std::map<std::string, MappingTransportInfo> output_transports;
 };
 
 // Also accepts unbound, descriptive graphs; export does not start any workers.

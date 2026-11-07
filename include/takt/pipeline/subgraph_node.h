@@ -19,13 +19,15 @@ class PipelineRuntime;
 class SubgraphNode final : public NodeBase
 {
   public:
-    struct BridgeLink
+    struct MappingLink
     {
         std::shared_ptr<AnyPipeEndpoint> source;
         std::shared_ptr<AnyPipeEndpoint> target;
         std::string source_label;
         std::string target_label;
     };
+    // Legacy name: the constructor accepts every mapping, including Direct pairs.
+    using BridgeLink = MappingLink;
 
     SubgraphNode(std::string node_name, std::shared_ptr<PipelineRuntime> runtime,
                  std::unordered_map<std::string, NodePortRef> input_port_mappings = {},
@@ -42,15 +44,24 @@ class SubgraphNode final : public NodeBase
     const std::unordered_map<std::string, NodePortRef>&
     output_port_mappings() const noexcept;
 
+    size_t mapping_count() const noexcept { return mapping_links_.size(); }
+    size_t bridge_count() const noexcept { return bridge_links_.size(); }
+    size_t launched_bridge_worker_count() const noexcept
+    {
+        return launched_bridge_workers_.load();
+    }
+
   private:
     void run_bridge(size_t index);
 
     std::shared_ptr<PipelineRuntime> runtime_;
     std::unordered_map<std::string, NodePortRef> input_port_mappings_;
     std::unordered_map<std::string, NodePortRef> output_port_mappings_;
+    std::vector<MappingLink> mapping_links_;
     std::vector<BridgeLink> bridge_links_;
     std::vector<std::future<void>> bridge_workers_;
     std::atomic<bool> bridge_stop_requested_{false};
+    std::atomic<size_t> launched_bridge_workers_{0};
     std::mutex bridge_error_mutex_;
     bool has_bridge_error_ = false;
     std::string bridge_error_message_;

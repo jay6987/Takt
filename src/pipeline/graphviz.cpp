@@ -66,6 +66,7 @@ void require_port(const std::vector<PortSpec>& ports, const std::string& name)
 void validate_mappings(const NodeSpec& outer, const PipelineGraph& inner, bool input)
 {
     const auto& mappings = input ? inner.input_mappings : inner.output_mappings;
+    const auto& transports = input ? inner.input_transports : inner.output_transports;
     const auto& outer_ports = input ? outer.input_ports : outer.output_ports;
     for (const auto& mapping : mappings)
     {
@@ -73,6 +74,25 @@ void validate_mappings(const NodeSpec& outer, const PipelineGraph& inner, bool i
         const auto& target = inner.nodes[node_index(inner, mapping.second.node_name)];
         require_port(input ? target.input_ports : target.output_ports,
                      mapping.second.port_name);
+    }
+    for (const auto& transport : transports)
+    {
+        if (mappings.count(transport.first) == 0)
+            throw std::invalid_argument("DOT transport references unknown mapping: " +
+                                        transport.first);
+        const auto& info = transport.second;
+        switch (info.mode)
+        {
+        case MappingTransport::Unresolved:
+        case MappingTransport::Bridge:
+            break;
+        case MappingTransport::Direct:
+            if (info.source_pipe != info.target_pipe)
+                throw std::invalid_argument("DOT direct mapping has different pipe names");
+            break;
+        default:
+            throw std::invalid_argument("DOT mapping has invalid transport mode");
+        }
     }
 }
 
@@ -108,6 +128,25 @@ std::string node_id(const std::string& prefix, size_t index)
     return prefix + "n" + std::to_string(index);
 }
 
+MappingTransportInfo transport_info(const PipelineGraph& inner,
+                                    const std::string& port, bool input)
+{
+    const auto& transports = input ? inner.input_transports : inner.output_transports;
+    const auto found = transports.find(port);
+    return found == transports.end() ? MappingTransportInfo{} : found->second;
+}
+
+std::string boundary_id(const NodeSpec& node, const std::string& id,
+                         const std::string& port, bool input)
+{
+    const auto& ports = input ? node.input_ports : node.output_ports;
+    const auto found = std::find_if(ports.begin(), ports.end(),
+                                    [&](const PortSpec& candidate)
+                                    { return candidate.name == port; });
+    return id + (input ? "_in" : "_out") +
+           std::to_string(found - ports.begin());
+}
+
 void write_edge(std::ostream& output, const std::string& source,
                 const std::string& target, const std::string& label,
                 bool mapping = false)
@@ -120,36 +159,93 @@ void write_edge(std::ostream& output, const std::string& source,
     output << "];\n";
 }
 
-std::string endpoint_id(const PipelineGraph& graph, const std::string& prefix,
-                        const std::string& node, const std::string& port, bool input,
-                        const DotOptions& options)
+struct Endpoint
+{
+    std::string id;
+    std::string annotation;
+};
+
+Endpoint resolve_endpoint(const PipelineGraph& graph, const std::string& prefix,
+                          const std::string& node, const std::string& port, bool input,
+                          const DotOptions& options)
 {
     const auto index = node_index(graph, node);
     auto id = node_id(prefix, index);
-    if (options.expand_subgraphs && graph.subgraphs.count(node) != 0)
+    const auto child = graph.subgraphs.find(node);
+    if (options.expand_subgraphs && child != graph.subgraphs.end())
     {
-        const auto& ports =
-            input ? graph.nodes[index].input_ports : graph.nodes[index].output_ports;
-        const auto found =
-            std::find_if(ports.begin(), ports.end(), [&](const PortSpec& candidate)
-                         { return candidate.name == port; });
-        id += (input ? "_in" : "_out") + std::to_string(found - ports.begin());
+        const auto boundary = boundary_id(graph.nodes[index], id, port, input);
+        if (options.view == DotView::Connections)
+        {
+            const auto& inner = child->second;
+            const auto& mappings = input ? inner.input_mappings : inner.output_mappings;
+            const auto mapping = mappings.find(port);
+            if (mapping != mappings.end())
+            {
+                const auto info = transport_info(inner, port, input);
+                if (info.mode == MappingTransport::Direct)
+                {
+                    auto endpoint = resolve_endpoint(
+                        inner, id + "_", mapping->second.node_name,
+                        mapping->second.port_name, input, options);
+                    endpoint.annotation = "\ndirect/shared Pipe: " + info.source_pipe +
+                                          endpoint.annotation;
+                    return endpoint;
+                }
+                if (info.mode == MappingTransport::Bridge)
+                    return {boundary + "_bridge",
+                            "\nPipe: " +
+                                (input ? info.source_pipe : info.target_pipe)};
+            }
+        }
+        return {boundary, {}};
     }
-    return id;
+    return {id, {}};
 }
 
-void write_ports(std::ostream& output, const NodeSpec& node, const std::string& id)
+bool connected_port(const PipelineGraph& graph, const NodeSpec& node,
+                    const std::string& port, bool input)
 {
-    for (size_t i = 0; i < node.input_ports.size(); ++i)
+    for (const auto& edge : graph.edges)
+        if (input ? edge.to_node == node.name && edge.to_port == port
+                  : edge.from_node == node.name && edge.from_port == port)
+            return true;
+    const auto& mappings = input ? graph.input_mappings : graph.output_mappings;
+    for (const auto& mapping : mappings)
+        if (mapping.second.node_name == node.name && mapping.second.port_name == port)
+            return true;
+    return false;
+}
+
+bool show_boundary(const PipelineGraph& graph, const NodeSpec& node,
+                   const PipelineGraph& inner, const std::string& port, bool input,
+                   const DotOptions& options)
+{
+    const auto info = transport_info(inner, port, input);
+    return options.view == DotView::Interfaces ||
+           info.mode == MappingTransport::Unresolved ||
+           (info.mode == MappingTransport::Direct &&
+            !connected_port(graph, node, port, input));
+}
+
+void write_ports(std::ostream& output, const PipelineGraph& graph,
+                 const NodeSpec& node, const PipelineGraph& inner,
+                 const std::string& id, const DotOptions& options)
+{
+    for (const auto& port : node.input_ports)
     {
-        output << "  " << id << "_in" << i
-               << " [shape=ellipse,label=" << quoted("in: " + node.input_ports[i].name)
+        if (!show_boundary(graph, node, inner, port.name, true, options))
+            continue;
+        output << "  " << boundary_id(node, id, port.name, true)
+               << " [shape=ellipse,label=" << quoted("in: " + port.name)
                << "];\n";
     }
-    for (size_t i = 0; i < node.output_ports.size(); ++i)
+    for (const auto& port : node.output_ports)
     {
-        output << "  " << id << "_out" << i << " [shape=ellipse,label="
-               << quoted("out: " + node.output_ports[i].name) << "];\n";
+        if (!show_boundary(graph, node, inner, port.name, false, options))
+            continue;
+        output << "  " << boundary_id(node, id, port.name, false)
+               << " [shape=ellipse,label=" << quoted("out: " + port.name) << "];\n";
     }
     if (node.input_ports.empty() && node.output_ports.empty())
     {
@@ -162,22 +258,67 @@ void write_mappings(std::ostream& output, const PipelineGraph& outer,
                     const std::string& prefix, const std::string& inner_prefix,
                     const DotOptions& options)
 {
-    for (const auto& mapping : inner.input_mappings)
+    const auto write = [&](const auto& mappings, bool input)
     {
-        write_edge(output,
-                   endpoint_id(outer, prefix, node.name, mapping.first, true, options),
-                   endpoint_id(inner, inner_prefix, mapping.second.node_name,
-                               mapping.second.port_name, true, options),
-                   mapping.first + " -> " + mapping.second.port_name, true);
-    }
-    for (const auto& mapping : inner.output_mappings)
+        const auto id = node_id(prefix, node_index(outer, node.name));
+        for (const auto& mapping : mappings)
+        {
+            const auto boundary = boundary_id(node, id, mapping.first, input);
+            const auto endpoint = resolve_endpoint(
+                inner, inner_prefix, mapping.second.node_name,
+                mapping.second.port_name, input, options);
+            const auto info = transport_info(inner, mapping.first, input);
+            const auto ports = input ? mapping.first + " -> " + mapping.second.port_name
+                                     : mapping.second.port_name + " -> " + mapping.first;
+            if (info.mode == MappingTransport::Bridge)
+            {
+                const auto bridge = boundary + "_bridge";
+                output << "  " << bridge << " [shape=component,label="
+                       << quoted("bridge: " + ports + "\ndedicated worker\n" +
+                                 info.source_pipe + " -> " + info.target_pipe)
+                       << "];\n";
+                if (options.view == DotView::Interfaces)
+                    write_edge(output, input ? boundary : bridge,
+                               input ? bridge : boundary,
+                               input ? info.source_pipe : info.target_pipe);
+                write_edge(output, input ? bridge : endpoint.id,
+                           input ? endpoint.id : bridge,
+                           (input ? info.target_pipe : info.source_pipe) +
+                               "\n" + ports + endpoint.annotation);
+            }
+            else if (show_boundary(outer, node, inner, mapping.first, input, options))
+            {
+                const auto label = ports +
+                    (info.mode == MappingTransport::Direct
+                         ? "\ndirect/shared Pipe: " + info.source_pipe
+                         : "\nunresolved") + endpoint.annotation;
+                write_edge(output, input ? boundary : endpoint.id,
+                           input ? endpoint.id : boundary, label,
+                           info.mode == MappingTransport::Unresolved);
+            }
+        }
+    };
+    write(inner.input_mappings, true);
+    write(inner.output_mappings, false);
+}
+
+std::string mapping_summary(const PipelineGraph& inner)
+{
+    size_t direct = 0, bridge = 0, unresolved = 0;
+    const auto count = [&](const auto& mappings, bool input)
     {
-        write_edge(output,
-                   endpoint_id(inner, inner_prefix, mapping.second.node_name,
-                               mapping.second.port_name, false, options),
-                   endpoint_id(outer, prefix, node.name, mapping.first, false, options),
-                   mapping.second.port_name + " -> " + mapping.first, true);
-    }
+        for (const auto& mapping : mappings)
+            switch (transport_info(inner, mapping.first, input).mode)
+            {
+            case MappingTransport::Direct: ++direct; break;
+            case MappingTransport::Bridge: ++bridge; break;
+            case MappingTransport::Unresolved: ++unresolved; break;
+            }
+    };
+    count(inner.input_mappings, true);
+    count(inner.output_mappings, false);
+    return "\ndirect=" + std::to_string(direct) + " bridge=" +
+           std::to_string(bridge) + " unresolved=" + std::to_string(unresolved);
 }
 
 void write_graph(std::ostream& output, const PipelineGraph& graph,
@@ -194,7 +335,7 @@ void write_graph(std::ostream& output, const PipelineGraph& graph,
             output << "  subgraph cluster_" << id << " {\n"
                    << "    label=" << quoted(node.name + "\n" + child->second.name)
                    << ";\n";
-            write_ports(output, node, id);
+            write_ports(output, graph, node, child->second, id, options);
             write_graph(output, child->second, inner_prefix, options);
             write_mappings(output, graph, node, child->second, prefix, inner_prefix,
                            options);
@@ -202,7 +343,9 @@ void write_graph(std::ostream& output, const PipelineGraph& graph,
         }
         else
         {
-            output << "  " << id << " [label=" << quoted(node.name)
+            output << "  " << id << " [label="
+                   << quoted(node.name + (child == graph.subgraphs.end()
+                                               ? "" : mapping_summary(child->second)))
                    << ",shape=" << (child == graph.subgraphs.end() ? "box" : "box3d")
                    << "];\n";
         }
@@ -211,17 +354,20 @@ void write_graph(std::ostream& output, const PipelineGraph& graph,
     {
         const auto label = (edge.name.empty() ? "" : edge.name + "\n") +
                            edge.from_port + " -> " + edge.to_port;
-        write_edge(
-            output,
-            endpoint_id(graph, prefix, edge.from_node, edge.from_port, false, options),
-            endpoint_id(graph, prefix, edge.to_node, edge.to_port, true, options),
-            label);
+        const auto source = resolve_endpoint(
+            graph, prefix, edge.from_node, edge.from_port, false, options);
+        const auto target = resolve_endpoint(
+            graph, prefix, edge.to_node, edge.to_port, true, options);
+        write_edge(output, source.id, target.id,
+                   label + source.annotation + target.annotation);
     }
 }
 } // namespace
 
 std::string to_dot(const PipelineGraph& graph, DotOptions options)
 {
+    if (options.view != DotView::Connections && options.view != DotView::Interfaces)
+        throw std::invalid_argument("DOT options have invalid view");
     validate_graph(graph);
     std::ostringstream output;
     output << "digraph pipeline {\n  graph [label=" << quoted(graph.name)

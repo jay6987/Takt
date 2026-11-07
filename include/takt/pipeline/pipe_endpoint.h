@@ -7,6 +7,7 @@
 #include <string>
 #include <typeinfo>
 
+#include "takt/pipeline/channel.h"
 #include "takt/pipeline/pipe.h"
 
 namespace takt
@@ -40,7 +41,30 @@ class AnyPipeEndpoint
     }
     virtual std::string debug_name() const = 0;
     virtual std::shared_ptr<PipeBase> lifecycle_pipe() const = 0;
+    // Opt in only when sharing a pipe can bypass all endpoint operations.
+    virtual bool supports_direct_to(const AnyPipeEndpoint&) const noexcept
+    {
+        return false;
+    }
 };
+
+inline MappingTransportInfo classify_mapping(const AnyPipeEndpoint& source,
+                                              const AnyPipeEndpoint& target)
+{
+    const auto source_pipe = source.lifecycle_pipe();
+    const auto target_pipe = target.lifecycle_pipe();
+    if (!source_pipe || !target_pipe)
+        throw std::invalid_argument("subgraph endpoint lifecycle pipe cannot be null");
+    auto mode = MappingTransport::Bridge;
+    if (source_pipe == target_pipe)
+    {
+        if (!source.supports_direct_to(target) || !target.supports_direct_to(source))
+            throw std::invalid_argument("endpoints do not support direct mapping of pipe='" +
+                                        source_pipe->name() + "'");
+        mode = MappingTransport::Direct;
+    }
+    return {mode, source_pipe->name(), target_pipe->name()};
+}
 
 template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
 {
@@ -126,6 +150,12 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
     std::shared_ptr<PipeBase> lifecycle_pipe() const override
     {
         return pipe_;
+    }
+
+    bool supports_direct_to(const AnyPipeEndpoint& target) const noexcept override
+    {
+        const auto* typed = dynamic_cast<const TypedPipeEndpoint<T>*>(&target);
+        return typed && pipe_ == typed->pipe_;
     }
 
   private:

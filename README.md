@@ -11,6 +11,11 @@ Current implementation status:
   blocking backpressure, batch read/write tokens, and overlap-window reads.
 - Node execution is task-driven with a built-in ingress manager and worker pool: users implement `build_task(sequence_id)` and `process_task(worker_index, task)`.
 - Structured exception context is available through `NodeExceptionContext` and default logs include stage/pipe/worker metadata.
+- Subgraphs retain logical grouping without mandatory transfer threads: typed
+  endpoints sharing one Pipe use Direct mappings; distinct pipes keep Bridge
+  workers. Custom endpoints must explicitly opt into Direct.
+- DOT export provides compute-connection and logical-interface views, explicit
+  bridge nodes and unresolved descriptive mappings without starting workers.
 - Record/replay bindings use move-only scoped guards with checked explicit cleanup.
 - CTest covers pipeline behavior, record/replay cleanup, concurrency, and package installation.
 

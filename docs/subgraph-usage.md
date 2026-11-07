@@ -2,7 +2,17 @@
 
 `PipelineBuilder::bind_subgraph` lets you compose an inner pipeline as a node in an outer graph.
 
-Compatible typed endpoints now transfer using `transfer_to`: the bridge retains
+## Direct mappings and bridges
+
+Mapped `TypedPipeEndpoint<T>` wrappers sharing the **same Pipe object** use
+Direct mappings: the outer and inner compute nodes operate on that pipe without
+a bridge worker, second queue, token transfer or buffer swap. Endpoint wrappers
+may be different objects. Equal pipe names do not imply shared identity.
+Configure the pipe once with its real producer and consumer before initialization.
+The builder never replaces pipes already held by nodes.
+
+Different pipes retain Bridge mappings. Compatible typed endpoints transfer
+using `transfer_to`: the bridge retains
 both tokens and swaps basket storage. For `std::vector<float>`/`double`, this
 exchanges preallocated buffers without copying image pixels through `std::any`.
 Buffer identity can move between pipes; do not cache a basket's vector data
@@ -11,6 +21,11 @@ and disable read-history snapshots for non-overlap image streams.
 
 Explicit endpoint `read()`/`write()` still provide the legacy copied packet API.
 Custom endpoint implementations must implement `close_with_error(message)`.
+They default to Bridge, preserving custom read/write processing. To opt into
+Direct, both endpoints must affirm `supports_direct_to(other)` and share a
+non-null `lifecycle_pipe()`. Only opt in if bypassing all endpoint operations is
+semantically equivalent. Unsupported same-pipe mappings fail during binding or
+construction; explicit `transfer_to` still rejects a pipe bridged to itself.
 Bridge errors close both affected endpoints with an error, waking upstream
 writers and propagating failure downstream after successful data drains.
 
@@ -50,15 +65,34 @@ runtime->start();
 runtime->join();
 ```
 
+For Direct, use `inner_in = outer_in` and `inner_out = outer_out` when wiring
+nodes, and omit bridge producer/consumer configurations. For Bridge, use distinct
+pipes and configure bridge participants on their respective sides.
+`takt_subgraph_example` demonstrates Direct by default; passing `bridge`
+demonstrates the original independent-queue topology.
+
 Create each pipe with a name-only constructor and configure both ends before
-preparation (see [Quick Start](quickstart.md)). Count the input/output bridges as
+preparation (see [Quick Start](quickstart.md)). Count only actual bridges as
 participants when declaring each pipe's concurrency demand. Binding a subgraph
 retains the same endpoint pipe objects; runtime initialization traverses nested
 runtimes and deduplicates shared connections by object identity, not name.
 It does not swap pipes during preparation. Do not close or fault an input before
 runtime initialization. If starting `SubgraphNode` directly, construct it first
-so its bridges register their pipes, then initialize its internal
+so all mappings register their pipes, then initialize its internal
 `PipelineRuntime` before calling `start()`.
+
+The constructor accepts every endpoint pair, including Direct pairs, as
+`SubgraphNode::MappingLink` (`BridgeLink` remains a source-compatible alias).
+`mapping_count()` counts all pairs, `bridge_count()` counts only transfer workers,
+and `launched_bridge_worker_count()` reports successful launches at the latest
+start (retained after join). These are local counts, not recursive thread totals.
+Lifecycle registration and stop cover all mappings, even when bridge count is
+zero. Direct EOF/error propagation belongs to real pipe-owning compute nodes;
+there is no bridge to manufacture closure. See [Node Model](node-model.md).
+
+Direct removes queue capacity and changes backpressure/possible overlap.
+Retain distinct pipes when independent buffering is intentional. Direct does not
+permit multiple producers or consumers to configure one pipe.
 
 ## Required Descriptor
 
@@ -77,19 +111,30 @@ Export the declared topology before or after binding nodes; no workers are start
 std::string expanded = outer.to_dot();
 std::string collapsed = outer.to_dot({false, true});
 std::string vertical = outer.to_dot({true, false});
+std::string interfaces = outer.to_dot({true, true, takt::DotView::Interfaces});
 ```
 
-`DotOptions` controls `expand_subgraphs` (default true) and `left_to_right`
-(default true). Write the returned string to a file using your application's
+`DotOptions` controls `expand_subgraphs` (default true), `left_to_right`
+(default true), and `view` (default `DotView::Connections`). Existing two-bool
+initializers keep their expansion and direction meanings. Write the returned
+string to a file using your application's
 normal checked I/O. Graphviz is not a Takt build/runtime dependency. If available:
 
 ```sh
 dot -Tsvg pipeline.dot -o pipeline.svg
 ```
 
-Expanded subgraphs become nested `cluster` groups with separate input/output
-boundary nodes and dashed port-mapping edges. This avoids artificial cycles
-through a single interface node. Collapsed subgraphs use a 3D box. Normal edges
+Expanded subgraphs retain nested `cluster` groups. The default Connections view
+resolves Direct mappings recursively to compute nodes, including cross-cluster
+edges labeled `direct/shared Pipe`. Bridge mappings show explicit component
+nodes labeled `bridge`, `dedicated worker` and both pipe names. Each bridge
+has source/target pipe edges; it is not hidden in a dashed mapping.
+
+The Interfaces view retains separate input/output ellipses. Direct mappings are
+labeled solid links, Bridge mappings still have explicit transfer nodes, and
+unknown mappings are dashed and labeled `unresolved`. Unconnected Direct ports
+remain visible in Connections view. Collapsed subgraphs use a 3D box with local
+Direct/Bridge/Unresolved mapping counts, not nested worker totals. Normal edges
 show channel names (when provided) and source/target port names.
 Names are escaped as DOT strings, and generated structural IDs cannot collide
 when names repeat in different subgraphs. Output order is deterministic for the
@@ -109,6 +154,16 @@ and set each inner graph's `input_mappings`/`output_mappings`. Such a diagram
 describes supplied topology only: it is not evidence that a runtime was executed
 or a performance trace.
 
+`PipelineGraph::input_transports` / `output_transports` store value-owned
+`MappingTransportInfo` keyed by mapped port, with mode and source/target pipe
+names. Builder binding populates them using the same classifier as execution.
+Hand-built graphs without this metadata are Unresolved, not presumed Bridge.
+Explicit metadata on a descriptive graph is a supplied declaration, not observed
+worker activity. Orphan metadata, invalid modes and invalid port references
+are rejected. Existing mapped aliases retain distinct structural IDs; equal pipe
+names do not collapse workers or nodes. Bound snapshots do not serialize Pipe
+object identities.
+
 ## Runnable Example
 
 - Source: `examples/subgraph/main.cpp`
@@ -118,4 +173,9 @@ Run after build:
 
 ```bash
 ./build/examples/subgraph/takt_subgraph_example
+./build/examples/subgraph/takt_subgraph_example bridge
 ```
+
+The first command uses shared Direct boundaries; the second uses separate pipes
+and two bridge workers. Both produce `2 4 6 8`. The executable location can differ
+when Takt is built inside a parent project; use that build's target output path.

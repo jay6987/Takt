@@ -98,7 +98,11 @@ For a directly constructed runtime, pass pipes explicitly when nodes do not
 expose bound endpoints: `PipelineRuntime runtime(nodes, {pipe});`.
 For stack-owned standalone pipes, initialize them directly before initializing
 the runtime. Construct `SubgraphNode` before initializing its internal runtime:
-its constructor registers bridge pipes with that runtime. For a directly started
+its constructor registers all mapped boundary pipes, including Direct pairs,
+with that runtime. Shared pipes are initialized once by object identity, while
+different-Pipe Bridge mappings retain both queues. Configure Direct boundaries
+with the actual compute producer/consumer, not additional bridge roles.
+For a directly started
 subgraph, initialize the internal runtime after construction and before start.
 Initialize before prefilling and closing input pipes;
 runtime preparation rejects closed or faulted connections.

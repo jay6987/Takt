@@ -130,7 +130,9 @@ require_pipe_endpoint_from_port(const PortSpec& port, const std::string& context
 std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
     const NodeSpec& outer_node, const std::vector<NodeSpec>& inner_nodes,
     const std::unordered_map<std::string, NodePortRef>& input_port_mappings,
-    const std::unordered_map<std::string, NodePortRef>& output_port_mappings)
+    const std::unordered_map<std::string, NodePortRef>& output_port_mappings,
+    std::map<std::string, MappingTransportInfo>& input_transports,
+    std::map<std::string, MappingTransportInfo>& output_transports)
 {
     std::vector<SubgraphNode::BridgeLink> links;
     links.reserve(input_port_mappings.size() + output_port_mappings.size());
@@ -155,6 +157,8 @@ std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
             require_pipe_endpoint_from_port(*inner_input, "inner input"),
             outer_node.name + "." + outer_input->name,
             mapping.second.node_name + "." + mapping.second.port_name});
+        input_transports.emplace(
+            mapping.first, classify_mapping(*links.back().source, *links.back().target));
     }
 
     for (const auto& mapping : output_port_mappings)
@@ -177,6 +181,8 @@ std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
             require_pipe_endpoint_from_port(*outer_output, "outer output"),
             mapping.second.node_name + "." + mapping.second.port_name,
             outer_node.name + "." + outer_output->name});
+        output_transports.emplace(
+            mapping.first, classify_mapping(*links.back().source, *links.back().target));
     }
 
     return links;
@@ -514,6 +520,8 @@ PipelineBuilder& PipelineBuilder::bind_subgraph(
     }
 
     std::vector<SubgraphNode::BridgeLink> bridge_links;
+    std::map<std::string, MappingTransportInfo> input_transports;
+    std::map<std::string, MappingTransportInfo> output_transports;
     {
         std::lock_guard<std::mutex> inner_lk(subgraph_builder.state_->mutex);
         validate_subgraph_port_mappings_locked(
@@ -522,7 +530,7 @@ PipelineBuilder& PipelineBuilder::bind_subgraph(
 
         bridge_links = build_subgraph_bridge_links_locked(
             outer_node, subgraph_builder.state_->nodes, input_port_mappings,
-            output_port_mappings);
+            output_port_mappings, input_transports, output_transports);
     }
 
     auto topology = subgraph_builder.graph();
@@ -530,6 +538,8 @@ PipelineBuilder& PipelineBuilder::bind_subgraph(
                                    input_port_mappings.end());
     topology.output_mappings.insert(output_port_mappings.begin(),
                                     output_port_mappings.end());
+    topology.input_transports = std::move(input_transports);
+    topology.output_transports = std::move(output_transports);
     std::lock_guard<std::mutex> lk(state_->mutex);
     state_->bound_nodes[node_name] = std::make_shared<SubgraphNode>(
         node_name, std::move(subgraph_runtime), std::move(input_port_mappings),
@@ -657,7 +667,8 @@ void PipelineBuilder::validate() const
 PipelineGraph PipelineBuilder::graph() const
 {
     std::lock_guard<std::mutex> lk(state_->mutex);
-    return {state_->name, state_->nodes, state_->channels, state_->subgraphs, {}, {}};
+    return {state_->name, state_->nodes, state_->channels, state_->subgraphs,
+            {}, {}, {}, {}};
 }
 
 std::string PipelineBuilder::to_dot(DotOptions options) const

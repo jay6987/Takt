@@ -18,6 +18,7 @@ add_executable(takt_smoke_test
     node_tests.cpp
     pipeline_contract_tests.cpp
     graphviz_tests.cpp
+    subgraph_direct_tests.cpp
 )
 
 target_link_libraries(takt_smoke_test

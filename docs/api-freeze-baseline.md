@@ -39,10 +39,12 @@ Pipe constructors are removed. See [Changelog](../CHANGELOG.md) and
 - `struct NodeSpec`
 - `struct EdgeSpec`
 - `struct NodePortRef`
+- `enum class MappingTransport` and `struct MappingTransportInfo` (additive, unreleased)
 - `class PipelineBuilder`
 - `class PipelineRuntime`
 - `struct PipelineGraph` (additive, unreleased)
 - `struct DotOptions` (additive, unreleased)
+- `enum class DotView` (additive, unreleased; Connections is the default)
 - `std::string to_dot(const PipelineGraph&, DotOptions)` (additive, unreleased)
 
 ### Node Model
@@ -51,6 +53,8 @@ Pipe constructors are removed. See [Changelog](../CHANGELOG.md) and
 - `class NodeBase`
 - `class Node`
 - `class SubgraphNode`
+- `SubgraphNode::MappingLink` (`BridgeLink` remains an alias for all mapped pairs)
+- `SubgraphNode::mapping_count()`, `bridge_count()`, `launched_bridge_worker_count()`
 
 ### Pipe Model
 
@@ -61,6 +65,8 @@ Pipe constructors are removed. See [Changelog](../CHANGELOG.md) and
 - `enum class BufferPolicy`
 - `template <typename T> class Pipe`
 - `class AnyPipeEndpoint`
+- `AnyPipeEndpoint::supports_direct_to(const AnyPipeEndpoint&) const noexcept`
+- `MappingTransportInfo classify_mapping(const AnyPipeEndpoint&, const AnyPipeEndpoint&)`
 - `template <typename T> class TypedPipeEndpoint`
 - `struct AnyPipePacket`
 - `struct PipeClosedAndEmptySignal`
