@@ -185,9 +185,9 @@ TEST(PipelineContracts,
     pipe.close();
 }
 
-// Verifies independent builders do not retain nodes in the named registry.
+// Verifies same-name builders are independent and release bound nodes.
 TEST(PipelineContracts,
-     UnregisteredBuildersAreIndependentAndReleaseBoundNodes)
+     SameNameBuildersAreIndependentAndReleaseBoundNodes)
 {
     std::weak_ptr<takt::NodeBase> weak;
     {
@@ -200,6 +200,9 @@ TEST(PipelineContracts,
         EXPECT_TRUE(second.nodes().empty());
     }
     EXPECT_TRUE(weak.expired());
+    auto rebuilt = takt::PipelineBuilder::create("scoped");
+    EXPECT_TRUE(rebuilt.nodes().empty());
+    EXPECT_FALSE(rebuilt.has_bound_node("first"));
 }
 
 // Verifies closure waits for outstanding writes before signaling completion.

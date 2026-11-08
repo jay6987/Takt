@@ -17,10 +17,7 @@ class PipelineRuntime;
 class PipelineBuilder
 {
   public:
-    // Returns shared named builder state retained in the declaration registry.
-    static PipelineBuilder declare(std::string name);
-    // Independent lifetime; unlike declare(), does not retain state in the
-    // named registry.
+    // Creates independent state; the name is a label, not a global identity.
     static PipelineBuilder create(std::string name);
 
     // Shares ownership of the same mutable builder state.

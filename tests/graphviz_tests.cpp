@@ -112,7 +112,7 @@ TEST(Graphviz,
 TEST(Graphviz,
      BuilderExportsUnboundGraphWithoutStartingRuntime)
 {
-    auto builder = takt::PipelineBuilder::declare("dot-unbound");
+    auto builder = takt::PipelineBuilder::create("dot-unbound");
     builder.add_node("source").add_output_port("source", "out");
     builder.add_node("sink").add_input_port("sink", "in");
     builder.connect("source", "out", "sink", "in", {}, "frames");
@@ -128,9 +128,9 @@ TEST(Graphviz,
 TEST(Graphviz,
      BoundSubgraphSnapshotMatchesBindingAndRebindingClearsIt)
 {
-    auto inner = takt::PipelineBuilder::declare("dot-bound-inner");
+    auto inner = takt::PipelineBuilder::create("dot-bound-inner");
     inner.add_node("worker").bind_node("worker", std::make_shared<IdleNode>());
-    auto outer = takt::PipelineBuilder::declare("dot-bound-outer");
+    auto outer = takt::PipelineBuilder::create("dot-bound-outer");
     outer.add_node("group").bind_subgraph("group", inner);
     EXPECT_NE(outer.to_dot().find("worker"), std::string::npos);
     inner.add_node("after-binding");
@@ -147,7 +147,7 @@ TEST(Graphviz,
     auto outer_output = std::make_shared<takt::Pipe<int>>("dot-outer-out");
     auto inner_input = std::make_shared<takt::Pipe<int>>("dot-inner-in");
     auto inner_output = std::make_shared<takt::Pipe<int>>("dot-inner-out");
-    auto inner = takt::PipelineBuilder::declare("dot-mapped-inner");
+    auto inner = takt::PipelineBuilder::create("dot-mapped-inner");
     inner.add_node("worker")
         .add_input_port(
             "worker", "input",
@@ -156,7 +156,7 @@ TEST(Graphviz,
             "worker", "output",
             {{"pipe_endpoint", takt::make_pipe_endpoint(inner_output)}})
         .bind_node("worker", std::make_shared<IdleNode>());
-    auto outer = takt::PipelineBuilder::declare("dot-mapped-outer");
+    auto outer = takt::PipelineBuilder::create("dot-mapped-outer");
     outer.add_node("filter")
         .add_input_port(
             "filter", "raw",

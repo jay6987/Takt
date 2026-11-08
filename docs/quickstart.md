@@ -71,7 +71,7 @@ int main() {
     for (const auto& pipe : {outer_in, outer_out})
         pipe->set_slot_capacity(16);
 
-    auto inner = takt::PipelineBuilder::declare("inner");
+    auto inner = takt::PipelineBuilder::create("inner");
     inner.add_node("worker");
     inner.add_input_port(
         "worker",
@@ -85,7 +85,7 @@ int main() {
     // Bind your own Node implementation here.
     // inner.bind_node("worker", std::make_shared<MyWorkerNode>(inner_in, inner_out));
 
-    auto outer = takt::PipelineBuilder::declare("outer");
+    auto outer = takt::PipelineBuilder::create("outer");
     outer.add_node("sg");
     outer.add_input_port(
         "sg",

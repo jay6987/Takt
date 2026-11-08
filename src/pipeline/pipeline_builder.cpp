@@ -30,38 +30,6 @@ struct PipelineBuilder::State
 
 namespace
 {
-class Registry
-{
-  public:
-    // Retains the named-state registry for the process lifetime.
-    static Registry& instance()
-    {
-        static Registry* registry = new Registry();
-        return *registry;
-    }
-
-    // Finds or creates shared named state under registry synchronization.
-    std::shared_ptr<PipelineBuilder::State>
-    get_or_create_state(const std::string& name)
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        auto it = states_.find(name);
-        if (it != states_.end())
-        {
-            return it->second;
-        }
-
-        auto state = std::make_shared<PipelineBuilder::State>(name);
-        states_.emplace(name, state);
-        return state;
-    }
-
-  private:
-    std::mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<PipelineBuilder::State>>
-        states_;
-};
-
 // Finds a named node or appends an empty declaration while state is locked.
 NodeSpec& ensure_node_locked(std::vector<NodeSpec>& nodes,
                              const std::string& name)
@@ -378,11 +346,6 @@ void validate_subgraph_port_mappings_locked(
     }
 }
 } // namespace
-
-PipelineBuilder PipelineBuilder::declare(std::string name)
-{
-    return PipelineBuilder(Registry::instance().get_or_create_state(name));
-}
 
 PipelineBuilder PipelineBuilder::create(std::string name)
 {

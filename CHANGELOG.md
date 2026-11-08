@@ -20,8 +20,8 @@ This project follows Semantic Versioning.
   policy requests and configured-batch acquisition APIs.
 - `PipelineRuntime::initialize()` prepares endpoint pipes and nested runtimes;
   directly constructed runtimes may receive an explicit pipe collection.
-- Scoped `PipelineBuilder::create(name)` creates independent state without retaining
-  bound nodes and payload storage in the named registry.
+- Scoped `PipelineBuilder::create(name)` creates independent state with
+  owner-managed lifetimes for bound nodes and payload storage.
 - `PipelineBuilder::graph()` and `to_dot()` export topology without running workers.
 - `PipelineGraph`, `DotOptions` and free `to_dot()` support descriptive graphs,
   nested Graphviz clusters, collapsed subgraphs, ports and edge labels.
@@ -31,6 +31,10 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- **Breaking:** Removed `PipelineBuilder::declare(name)` and its process-wide
+  named-state registry. Use `create(name)` for independent graphs, even with
+  identical names; pass a builder reference or copy its handle for explicit
+  sharing instead of looking it up by name.
 - Reformatted and documented owned C++ sources without changing public APIs.
 - Installed-package smoke validation now runs the consumer, not only builds it.
 - Owned test, quality-tool and example targets treat warnings as errors.

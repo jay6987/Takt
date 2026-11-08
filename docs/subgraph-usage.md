@@ -32,7 +32,7 @@ writers and propagating failure downstream after successful data drains.
 ## Mapping Pattern
 
 ```cpp
-auto inner = takt::PipelineBuilder::declare("inner");
+auto inner = takt::PipelineBuilder::create("inner");
 inner.add_node("worker");
 inner.add_input_port(
     "worker",
@@ -44,7 +44,7 @@ inner.add_output_port(
     {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
 inner.bind_node("worker", std::make_shared<DoubleNode>(inner_in, inner_out));
 
-auto outer = takt::PipelineBuilder::declare("outer");
+auto outer = takt::PipelineBuilder::create("outer");
 outer.add_node("sg");
 outer.add_input_port(
     "sg",

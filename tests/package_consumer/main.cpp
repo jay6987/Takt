@@ -8,7 +8,7 @@
 // Verifies linked package behavior using only installed public interfaces.
 int main()
 {
-    auto graph = takt::PipelineBuilder::declare("installed-dot");
+    auto graph = takt::PipelineBuilder::create("installed-dot");
     graph.add_node("source");
     if (graph.to_dot().find("source") == std::string::npos)
     {

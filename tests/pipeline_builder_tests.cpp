@@ -295,7 +295,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      SupportsMultipleInputsAndOutputs)
 {
-    auto builder = takt::PipelineBuilder::declare("graph-multi");
+    auto builder = takt::PipelineBuilder::create("graph-multi");
     builder.add_node("source");
     builder.add_node("transform");
     builder.add_node("sink");
@@ -322,7 +322,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      AllowsCyclesInGraphModel)
 {
-    auto builder = takt::PipelineBuilder::declare("graph-cycle");
+    auto builder = takt::PipelineBuilder::create("graph-cycle");
     builder.add_node("a");
     builder.add_node("b");
     builder.add_output_port("a", "out");
@@ -342,7 +342,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      AllowsDuplicateSameEndpointEdges)
 {
-    auto builder = takt::PipelineBuilder::declare("graph-duplicate-edges");
+    auto builder = takt::PipelineBuilder::create("graph-duplicate-edges");
     builder.add_node("source");
     builder.add_node("sink");
     builder.add_output_port("source", "out");
@@ -359,7 +359,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      BuildRuntimeInjectsPortMetadataToBoundNodes)
 {
-    auto builder = takt::PipelineBuilder::declare("graph-runtime-meta");
+    auto builder = takt::PipelineBuilder::create("graph-runtime-meta");
     builder.add_node("source");
     builder.add_node("transform");
     builder.add_output_port("source", "frames");
@@ -396,7 +396,7 @@ TEST(PipelineBuilderTests,
      BuildRuntimeInjectsDeclaredPortsWithoutChannels)
 {
     auto builder =
-        takt::PipelineBuilder::declare("graph-runtime-declared-only");
+        takt::PipelineBuilder::create("graph-runtime-declared-only");
     builder.add_node("standalone");
     builder.add_input_port("standalone", "in");
     builder.add_output_port("standalone", "out");
@@ -417,7 +417,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      RuntimeStartsAndJoinsBoundNodes)
 {
-    auto builder = takt::PipelineBuilder::declare("graph-runtime-run");
+    auto builder = takt::PipelineBuilder::create("graph-runtime-run");
     builder.add_node("a");
     builder.add_node("b");
 
@@ -437,7 +437,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      BindSubgraphBuildsCompositeNode)
 {
-    auto inner = takt::PipelineBuilder::declare("graph-inner");
+    auto inner = takt::PipelineBuilder::create("graph-inner");
     inner.add_node("inner-a");
     inner.add_node("inner-b");
 
@@ -445,7 +445,7 @@ TEST(PipelineBuilderTests,
     inner.bind_node("inner-a", std::make_shared<ProbeNode>(inner_run_count));
     inner.bind_node("inner-b", std::make_shared<ProbeNode>(inner_run_count));
 
-    auto outer = takt::PipelineBuilder::declare("graph-outer");
+    auto outer = takt::PipelineBuilder::create("graph-outer");
     outer.add_node("subgraph-entry");
     outer.bind_subgraph("subgraph-entry", inner);
 
@@ -466,7 +466,7 @@ TEST(PipelineBuilderTests,
     auto inner_in = make_configured_pipe("mapped-inner-in", 8, 0);
     auto inner_out = make_configured_pipe("mapped-inner-out", 8, 0);
 
-    auto inner = takt::PipelineBuilder::declare("graph-inner-mapped");
+    auto inner = takt::PipelineBuilder::create("graph-inner-mapped");
     inner.add_node("entry");
     inner.add_node("exit");
     inner.add_input_port(
@@ -480,7 +480,7 @@ TEST(PipelineBuilderTests,
     inner.bind_node("entry", std::make_shared<ProbeNode>(inner_run_count));
     inner.bind_node("exit", std::make_shared<ProbeNode>(inner_run_count));
 
-    auto outer = takt::PipelineBuilder::declare("graph-outer-mapped");
+    auto outer = takt::PipelineBuilder::create("graph-outer-mapped");
     outer.add_node("sg");
     outer.add_input_port(
         "sg", "raw",
@@ -510,13 +510,13 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      BindSubgraphRejectsMissingRequiredMapping)
 {
-    auto inner = takt::PipelineBuilder::declare("graph-inner-mapped-fail");
+    auto inner = takt::PipelineBuilder::create("graph-inner-mapped-fail");
     inner.add_node("entry");
     inner.add_input_port("entry", "in");
     std::atomic<int> inner_run_count{0};
     inner.bind_node("entry", std::make_shared<ProbeNode>(inner_run_count));
 
-    auto outer = takt::PipelineBuilder::declare("graph-outer-mapped-fail");
+    auto outer = takt::PipelineBuilder::create("graph-outer-mapped-fail");
     outer.add_node("sg");
     outer.add_input_port("sg", "raw");
 
@@ -532,7 +532,7 @@ TEST(PipelineBuilderTests,
     auto inner_in = make_configured_pipe("inner-in", 16, 0);
     auto inner_out = make_configured_pipe("inner-out", 16, 0);
 
-    auto inner = takt::PipelineBuilder::declare("graph-inner-bridge");
+    auto inner = takt::PipelineBuilder::create("graph-inner-bridge");
     inner.add_node("worker");
     inner.add_input_port(
         "worker", "in",
@@ -543,7 +543,7 @@ TEST(PipelineBuilderTests,
     inner.bind_node("worker",
                     std::make_shared<DoubleNode>(inner_in, inner_out));
 
-    auto outer = takt::PipelineBuilder::declare("graph-outer-bridge");
+    auto outer = takt::PipelineBuilder::create("graph-outer-bridge");
     outer.add_node("sg");
     outer.add_input_port(
         "sg", "raw",
@@ -626,14 +626,14 @@ TEST(PipelineBuilderTests,
     auto outer_in = make_configured_pipe("outer-in-mismatch", 8, 0);
     auto inner_in = make_configured_pipe("inner-in-mismatch", 8, std::string());
 
-    auto inner = takt::PipelineBuilder::declare("graph-inner-bridge-mismatch");
+    auto inner = takt::PipelineBuilder::create("graph-inner-bridge-mismatch");
     inner.add_node("sink");
     inner.add_input_port(
         "sink", "in",
         {{"pipe_endpoint", takt::make_pipe_endpoint<std::string>(inner_in)}});
     inner.bind_node("sink", std::make_shared<DrainStringNode>(inner_in));
 
-    auto outer = takt::PipelineBuilder::declare("graph-outer-bridge-mismatch");
+    auto outer = takt::PipelineBuilder::create("graph-outer-bridge-mismatch");
     outer.add_node("sg");
     outer.add_input_port(
         "sg", "raw",
@@ -672,7 +672,7 @@ TEST(PipelineBuilderTests,
     auto inner_in = make_configured_pipe("inner-in-lifecycle", 64, 0);
     auto inner_out = make_configured_pipe("inner-out-lifecycle", 64, 0);
 
-    auto inner = takt::PipelineBuilder::declare("graph-inner-lifecycle");
+    auto inner = takt::PipelineBuilder::create("graph-inner-lifecycle");
     inner.add_node("worker");
     inner.add_input_port(
         "worker", "in",
@@ -683,7 +683,7 @@ TEST(PipelineBuilderTests,
     inner.bind_node("worker",
                     std::make_shared<DoubleNode>(inner_in, inner_out));
 
-    auto outer = takt::PipelineBuilder::declare("graph-outer-lifecycle");
+    auto outer = takt::PipelineBuilder::create("graph-outer-lifecycle");
     outer.add_node("sg");
     outer.add_input_port(
         "sg", "raw",

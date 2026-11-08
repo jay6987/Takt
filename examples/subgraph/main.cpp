@@ -109,7 +109,7 @@ int main(int argc,
     outer_in->set_slot_capacity(16);
     outer_out->set_slot_capacity(16);
 
-    auto inner = takt::PipelineBuilder::declare("inner");
+    auto inner = takt::PipelineBuilder::create("inner");
     inner.add_node("worker");
     inner.add_input_port(
         "worker", "in",
@@ -120,7 +120,7 @@ int main(int argc,
     inner.bind_node("worker",
                     std::make_shared<DoubleNode>(inner_in, inner_out));
 
-    auto outer = takt::PipelineBuilder::declare("outer");
+    auto outer = takt::PipelineBuilder::create("outer");
     outer.add_node("sg");
     outer.add_input_port(
         "sg", "raw",
