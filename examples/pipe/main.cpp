@@ -1,15 +1,17 @@
+// Demonstrates configured pipe frames and scoped read/write token ownership.
 #include <iostream>
 #include <vector>
 
 #include "takt/takt.h"
 
+// Writes and reads example frames through explicitly initialized storage.
 int main()
 {
     takt::Pipe<int> numbers("numbers");
-    numbers.set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)},
-                         0);
-    numbers.set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    numbers.set_producer(
+        {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    numbers.set_consumer({"sink", takt::concurrency(1),
+                          takt::frames_per_read(1), takt::overlap_frames(0)});
     numbers.set_slot_capacity(8);
     numbers.initialize();
 

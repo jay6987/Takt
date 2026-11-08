@@ -1,3 +1,4 @@
+// Describes ports and the transport selected for subgraph boundary mappings.
 #pragma once
 
 #include <string>

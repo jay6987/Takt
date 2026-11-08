@@ -1,3 +1,4 @@
+// Initializes runtime trees and propagates lifecycle failures across nodes.
 #include "takt/pipeline/pipeline_runtime.h"
 
 #include <algorithm>
@@ -13,7 +14,8 @@ namespace takt
 {
 PipelineRuntime::PipelineRuntime(std::vector<std::shared_ptr<NodeBase>> nodes,
                                  std::vector<std::shared_ptr<PipeBase>> pipes)
-    : nodes_(std::move(nodes)), pipes_(std::move(pipes))
+    : nodes_(std::move(nodes)),
+      pipes_(std::move(pipes))
 {
     for (const auto& node : nodes_)
         if (!node)
@@ -37,12 +39,15 @@ bool PipelineRuntime::initialized() const noexcept
     return state_ == State::Initialized || state_ == State::Started;
 }
 
-void PipelineRuntime::collect_tree(std::vector<PipelineRuntime*>& runtimes,
-                                   std::vector<std::shared_ptr<PipeBase>>& pipes)
+void PipelineRuntime::collect_tree(
+    std::vector<PipelineRuntime*>& runtimes,
+    std::vector<std::shared_ptr<PipeBase>>& pipes)
 {
     if (std::find(runtimes.begin(), runtimes.end(), this) != runtimes.end())
-        throw std::logic_error("runtime tree contains a cycle or shared subgraph");
-    if (state_ == State::Started || state_ == State::Failed || state_ == State::Stopped)
+        throw std::logic_error(
+            "runtime tree contains a cycle or shared subgraph");
+    if (state_ == State::Started || state_ == State::Failed ||
+        state_ == State::Stopped)
         throw std::logic_error("runtime is not available for initialization");
     runtimes.push_back(this);
     pipes.insert(pipes.end(), pipes_.begin(), pipes_.end());
@@ -73,7 +78,8 @@ void PipelineRuntime::initialize()
         for (const auto* runtime : runtimes)
             for (const auto& node : runtime->nodes_)
                 if (!nodes.insert(node.get()).second)
-                    throw std::logic_error("node is shared by multiple runtimes");
+                    throw std::logic_error(
+                        "node is shared by multiple runtimes");
         std::unordered_set<PipeBase*> seen;
         std::vector<std::shared_ptr<PipeBase>> unique;
         for (const auto& pipe : pipes)
@@ -81,8 +87,9 @@ void PipelineRuntime::initialize()
             if (!seen.insert(pipe.get()).second)
                 continue;
             if (pipe->closed() || pipe->faulted())
-                throw std::logic_error("pipe='" + pipe->name() +
-                                       "': terminal pipe cannot initialize a runtime");
+                throw std::logic_error(
+                    "pipe='" + pipe->name() +
+                    "': terminal pipe cannot initialize a runtime");
             if (!pipe->initialized())
                 pipe->validate_configuration();
             unique.push_back(pipe);

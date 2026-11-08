@@ -1,3 +1,4 @@
+// Provides explicit, strongly typed producer and consumer configuration.
 #pragma once
 
 #include <cstddef>
@@ -14,43 +15,51 @@ enum class BufferPolicy
 
 struct Concurrency
 {
+    // Wraps an explicit endpoint concurrency count without implicit conversion.
     explicit constexpr Concurrency(size_t value) noexcept : value(value) {}
     size_t value;
 };
 
 struct FramesPerWrite
 {
+    // Wraps an explicit producer batch size.
     explicit constexpr FramesPerWrite(size_t value) noexcept : value(value) {}
     size_t value;
 };
 
 struct FramesPerRead
 {
+    // Wraps an explicit consumer window size.
     explicit constexpr FramesPerRead(size_t value) noexcept : value(value) {}
     size_t value;
 };
 
 struct OverlapFrames
 {
+    // Wraps the count retained between consumer windows.
     explicit constexpr OverlapFrames(size_t value) noexcept : value(value) {}
     size_t value;
 };
 
+// Creates a strongly typed endpoint concurrency argument.
 constexpr Concurrency concurrency(size_t value) noexcept
 {
     return Concurrency(value);
 }
 
+// Creates a strongly typed producer batch-size argument.
 constexpr FramesPerWrite frames_per_write(size_t value) noexcept
 {
     return FramesPerWrite(value);
 }
 
+// Creates a strongly typed consumer window-size argument.
 constexpr FramesPerRead frames_per_read(size_t value) noexcept
 {
     return FramesPerRead(value);
 }
 
+// Creates a strongly typed retained-overlap argument.
 constexpr OverlapFrames overlap_frames(size_t value) noexcept
 {
     return OverlapFrames(value);
@@ -58,10 +67,14 @@ constexpr OverlapFrames overlap_frames(size_t value) noexcept
 
 struct ProducerConfig
 {
+    // Uses one producer and one frame per write by default.
     ProducerConfig() = default;
-    ProducerConfig(std::string name, Concurrency concurrency = takt::concurrency(1),
+    // Names a producer with explicit, noninterchangeable batching settings.
+    ProducerConfig(std::string name,
+                   Concurrency concurrency = takt::concurrency(1),
                    FramesPerWrite frames = takt::frames_per_write(1))
-        : name(std::move(name)), concurrency(concurrency.value),
+        : name(std::move(name)),
+          concurrency(concurrency.value),
           frames_per_write(frames.value)
     {
     }
@@ -73,12 +86,17 @@ struct ProducerConfig
 
 struct ConsumerConfig
 {
+    // Uses one consumer and one frame per read without overlap by default.
     ConsumerConfig() = default;
-    ConsumerConfig(std::string name, Concurrency concurrency = takt::concurrency(1),
+    // Names a consumer with explicit window, overlap and concurrency settings.
+    ConsumerConfig(std::string name,
+                   Concurrency concurrency = takt::concurrency(1),
                    FramesPerRead frames = takt::frames_per_read(1),
                    OverlapFrames overlap = takt::overlap_frames(0))
-        : name(std::move(name)), concurrency(concurrency.value),
-          frames_per_read(frames.value), overlap_frames(overlap.value)
+        : name(std::move(name)),
+          concurrency(concurrency.value),
+          frames_per_read(frames.value),
+          overlap_frames(overlap.value)
     {
     }
 

@@ -1,3 +1,4 @@
+// Verifies strongly typed producer and consumer configuration values.
 #include "takt/takt.h"
 
 #include <gtest/gtest.h>
@@ -15,10 +16,15 @@ static_assert(is_strong_argument<takt::Concurrency>);
 static_assert(is_strong_argument<takt::FramesPerWrite>);
 static_assert(is_strong_argument<takt::FramesPerRead>);
 static_assert(is_strong_argument<takt::OverlapFrames>);
-static_assert(
-    !std::is_constructible_v<takt::ProducerConfig, std::string, size_t, size_t>);
-static_assert(!std::is_constructible_v<takt::ConsumerConfig, std::string, size_t,
-                                       size_t, size_t>);
+static_assert(!std::is_constructible_v<takt::ProducerConfig,
+                                       std::string,
+                                       size_t,
+                                       size_t>);
+static_assert(!std::is_constructible_v<takt::ConsumerConfig,
+                                       std::string,
+                                       size_t,
+                                       size_t,
+                                       size_t>);
 static_assert(!std::is_aggregate_v<takt::ProducerConfig>);
 static_assert(!std::is_aggregate_v<takt::ConsumerConfig>);
 static_assert(takt::concurrency(3).value == 3);
@@ -27,12 +33,15 @@ static_assert(takt::frames_per_read(7).value == 7);
 static_assert(takt::overlap_frames(2).value == 2);
 } // namespace
 
-TEST(PipeConfigTests, NamedArgumentsPreserveNumericFields)
+// Verifies named wrappers preserve each numeric configuration field.
+TEST(PipeConfigTests,
+     NamedArgumentsPreserveNumericFields)
 {
     takt::Pipe<int> pipe("named");
-    pipe.set_producer({"source", takt::concurrency(2), takt::frames_per_write(4)}, 9);
-    pipe.set_consumer(
-        {"sink", takt::concurrency(3), takt::frames_per_read(5), takt::overlap_frames(2)});
+    pipe.set_producer(
+        {"source", takt::concurrency(2), takt::frames_per_write(4)}, 9);
+    pipe.set_consumer({"sink", takt::concurrency(3), takt::frames_per_read(5),
+                       takt::overlap_frames(2)});
 
     const auto& producer = pipe.producer_config();
     EXPECT_EQ(producer.name, "source");
@@ -46,15 +55,17 @@ TEST(PipeConfigTests, NamedArgumentsPreserveNumericFields)
     EXPECT_EQ(pipe.slot_capacity(), 11U);
 }
 
-TEST(PipeConfigTests, DefaultConstructionAndNameOnlyRetainDefaults)
+// Verifies empty and name-only construction retain single-frame defaults.
+TEST(PipeConfigTests,
+     DefaultConstructionAndNameOnlyRetainDefaults)
 {
-    for (const takt::ProducerConfig config :
+    for (const takt::ProducerConfig& config :
          {takt::ProducerConfig{}, takt::ProducerConfig{"source"}})
     {
         EXPECT_EQ(config.concurrency, 1U);
         EXPECT_EQ(config.frames_per_write, 1U);
     }
-    for (const takt::ConsumerConfig config :
+    for (const takt::ConsumerConfig& config :
          {takt::ConsumerConfig{}, takt::ConsumerConfig{"sink"}})
     {
         EXPECT_EQ(config.concurrency, 1U);
@@ -81,7 +92,9 @@ TEST(PipeConfigTests, DefaultConstructionAndNameOnlyRetainDefaults)
     EXPECT_EQ(read.value(0), 42);
 }
 
-TEST(PipeConfigTests, OmittedTrailingArgumentsRetainDefaults)
+// Verifies optional trailing settings keep their documented defaults.
+TEST(PipeConfigTests,
+     OmittedTrailingArgumentsRetainDefaults)
 {
     takt::Pipe<int> pipe("partial");
     pipe.set_producer({"source", takt::concurrency(2)}, 0);
@@ -94,8 +107,10 @@ TEST(PipeConfigTests, OmittedTrailingArgumentsRetainDefaults)
     EXPECT_EQ(pipe.slot_capacity(), 3U);
 
     takt::Pipe<int> multi_frame_pipe("partial-multi-frame");
-    multi_frame_pipe.set_producer({"source", takt::concurrency(2), takt::frames_per_write(4)}, 0);
-    multi_frame_pipe.set_consumer({"sink", takt::concurrency(3), takt::frames_per_read(5)});
+    multi_frame_pipe.set_producer(
+        {"source", takt::concurrency(2), takt::frames_per_write(4)}, 0);
+    multi_frame_pipe.set_consumer(
+        {"sink", takt::concurrency(3), takt::frames_per_read(5)});
     EXPECT_EQ(multi_frame_pipe.consumer_config().frames_per_read, 5U);
     EXPECT_EQ(multi_frame_pipe.consumer_config().overlap_frames, 0U);
     EXPECT_EQ(multi_frame_pipe.slot_capacity(), 15U);

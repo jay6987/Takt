@@ -2,7 +2,10 @@ BasedOnStyle: LLVM
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
-ColumnLimit: 88
+ColumnLimit: 80
+PackParameters:
+  BinPack: AlwaysOnePerLine
+AllowAllParametersOfDeclarationOnNextLine: false
 BreakBeforeBraces: Allman
 AllowShortFunctionsOnASingleLine: Empty
 AllowShortIfStatementsOnASingleLine: Never

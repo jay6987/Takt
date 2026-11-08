@@ -1,5 +1,7 @@
+// Checks strongly typed pipe configuration and rejects ambiguous arguments.
 #include "takt/pipeline/pipe.h"
 
+// Compiles the selected valid or intentionally invalid configuration form.
 void test_pipe_configuration(takt::Pipe<int>& pipe)
 {
     using takt::concurrency;
@@ -9,7 +11,8 @@ void test_pipe_configuration(takt::Pipe<int>& pipe)
 
 #if defined(TAKT_TEST_CONFIG_CONTROL)
     pipe.set_producer({"source", concurrency(2), frames_per_write(4)}, 0);
-    pipe.set_consumer({"sink", concurrency(3), frames_per_read(5), overlap_frames(2)});
+    pipe.set_consumer(
+        {"sink", concurrency(3), frames_per_read(5), overlap_frames(2)});
     pipe.set_producer({"source"}, 0);
     pipe.set_consumer({"sink"});
     pipe.set_producer({"source", concurrency(2)}, 0);
@@ -34,13 +37,16 @@ void test_pipe_configuration(takt::Pipe<int>& pipe)
 #elif defined(TAKT_TEST_PRODUCER_SWAPPED)
     pipe.set_producer({"source", frames_per_write(1), concurrency(1)}, 0);
 #elif defined(TAKT_TEST_CONSUMER_SWAPPED_CONCURRENCY)
-    pipe.set_consumer({"sink", frames_per_read(1), concurrency(1), overlap_frames(0)});
+    pipe.set_consumer(
+        {"sink", frames_per_read(1), concurrency(1), overlap_frames(0)});
 #elif defined(TAKT_TEST_CONSUMER_SWAPPED_OVERLAP)
-    pipe.set_consumer({"sink", concurrency(1), overlap_frames(0), frames_per_read(1)});
+    pipe.set_consumer(
+        {"sink", concurrency(1), overlap_frames(0), frames_per_read(1)});
 #elif defined(TAKT_TEST_PRODUCER_READ_FRAMES)
     pipe.set_producer({"source", concurrency(1), frames_per_read(1)}, 0);
 #elif defined(TAKT_TEST_CONSUMER_WRITE_FRAMES)
-    pipe.set_consumer({"sink", concurrency(1), frames_per_write(1), overlap_frames(0)});
+    pipe.set_consumer(
+        {"sink", concurrency(1), frames_per_write(1), overlap_frames(0)});
 #else
 #error Define one pipe configuration test selector
 #endif

@@ -7,6 +7,11 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- Standalone LLVM 23 quality gate and CI enforcement for 80-column C++ lines,
+  file/function descriptions and one-parameter-per-line declarations.
+- Independent >=80% production line/branch coverage, ASan+UBSan and TSan gates,
+  with regression fixtures shared by the Lynx integration.
+- Logger dispatch and invalid builder-input/metadata regression tests.
 - Direct subgraph mappings for compatible typed endpoints sharing one Pipe;
   custom endpoints explicitly opt in through `supports_direct_to`.
 - Value-owned Direct/Bridge/Unresolved mapping transport metadata, local mapping
@@ -26,6 +31,9 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- Reformatted and documented owned C++ sources without changing public APIs.
+- Installed-package smoke validation now runs the consumer, not only builds it.
+- Owned test, quality-tool and example targets treat warnings as errors.
 - **Breaking:** `ProducerConfig` and `ConsumerConfig` require strong named numeric
   arguments: `concurrency(...)`, `frames_per_write(...)`, `frames_per_read(...)`
   and `overlap(...)`, in fixed order. Bare integers and mismatched types no

@@ -1,5 +1,6 @@
-#include "takt/takt.h"
+// Verifies pipeline execution contracts with realistic source and sink nodes.
 #include "pipe_test_support.h"
+#include "takt/takt.h"
 
 #include <gtest/gtest.h>
 
@@ -21,11 +22,14 @@ using FramePipe = takt::Pipe<Frame>;
 struct CopyProbe
 {
     static inline int copies = 0;
+    // Creates a payload whose subsequent copies are counted.
     CopyProbe() = default;
+    // Counts construction copies to detect unnecessary frame duplication.
     CopyProbe(const CopyProbe&)
     {
         ++copies;
     }
+    // Counts assignment copies to detect unnecessary payload duplication.
     CopyProbe& operator=(const CopyProbe&)
     {
         ++copies;
@@ -36,11 +40,19 @@ struct CopyProbe
 class FrameNode final : public takt::Node
 {
   public:
-    FrameNode(FramePipe& input, FramePipe& output, bool inject_failure)
-        : Node("frame", 1, 1), input_(input), output_(output),
+    // Binds vector frame pipes with optional deterministic worker failure.
+    FrameNode(FramePipe& input,
+              FramePipe& output,
+              bool inject_failure)
+        : Node("frame",
+               1,
+               1),
+          input_(input),
+          output_(output),
           inject_failure_(inject_failure)
     {
     }
+    // Stops and joins workers before referenced pipe members are destroyed.
     ~FrameNode() override
     {
         request_stop();
@@ -53,8 +65,11 @@ class FrameNode final : public takt::Node
   private:
     struct FrameTask final : Task
     {
-        FrameTask(FramePipe::ReadToken input_token, FramePipe::WriteToken output_token)
-            : input(std::move(input_token)), output(std::move(output_token)),
+        // Retains input/output tokens and the original input storage address.
+        FrameTask(FramePipe::ReadToken input_token,
+                  FramePipe::WriteToken output_token)
+            : input(std::move(input_token)),
+              output(std::move(output_token)),
               reserved_address(input.value().data())
         {
         }
@@ -62,21 +77,26 @@ class FrameNode final : public takt::Node
         FramePipe::WriteToken output;
         const float* reserved_address;
     };
+    // Reserves token-owned frames until the input stream is drained.
     std::unique_ptr<Task> build_task(uint64_t) override
     {
         try
         {
             auto input = input_.acquire_read();
-            auto output = input.is_shot_end() ? output_.acquire_shot_end_write(1)
-                                                 : output_.acquire_write();
-            return std::make_unique<FrameTask>(std::move(input), std::move(output));
+            auto output = input.is_shot_end()
+                              ? output_.acquire_shot_end_write(1)
+                              : output_.acquire_write();
+            return std::make_unique<FrameTask>(std::move(input),
+                                               std::move(output));
         }
         catch (const takt::PipeClosedAndEmptySignal&)
         {
             return nullptr;
         }
     }
-    void process_task(size_t, Task& task) override
+    // Doubles vector elements and checks token-owned input storage stability.
+    void process_task(size_t,
+                      Task& task) override
     {
         auto& frame = static_cast<FrameTask&>(task);
         if (inject_failure_ && task.sequence_id == 2)
@@ -84,17 +104,20 @@ class FrameNode final : public takt::Node
             throw std::runtime_error("injected frame failure");
         }
         storage_preserved.store(storage_preserved.load() &&
-                                frame.input.value().data() == frame.reserved_address);
+                                frame.input.value().data() ==
+                                    frame.reserved_address);
         for (size_t i = 0; i < frame.input.value().size(); ++i)
         {
             frame.output.value()[i] = frame.input.value()[i] * 2.0F;
         }
         frame.output.publish();
     }
+    // Closes output after no further frames can be admitted.
     void on_ingress_manager_done() override
     {
         output_.close();
     }
+    // Faults both pipe boundaries and preserves standard failure logging.
     void on_exception(const takt::NodeExceptionContext& context) override
     {
         input_.close_with_error(context.message);
@@ -109,14 +132,19 @@ class FrameNode final : public takt::Node
 class BlockedNode final : public takt::Node
 {
   public:
+    // Blocks processing on a shared signal to expose bounded ingress behavior.
     explicit BlockedNode(std::shared_future<void> release)
-        : Node("bounded", 1, 1), release_(std::move(release))
+        : Node("bounded",
+               1,
+               1),
+          release_(std::move(release))
     {
     }
     std::atomic<int> built{0};
     std::promise<void> second_built;
 
   private:
+    // Produces four tasks and signals when a second task is admitted.
     std::unique_ptr<Task> build_task(uint64_t sequence) override
     {
         if (sequence == 4)
@@ -126,7 +154,9 @@ class BlockedNode final : public takt::Node
             second_built.set_value();
         return task;
     }
-    void process_task(size_t, Task&) override
+    // Waits for the test to release the permanently blocked worker.
+    void process_task(size_t,
+                      Task&) override
     {
         release_.wait();
     }
@@ -134,7 +164,9 @@ class BlockedNode final : public takt::Node
 };
 } // namespace
 
-TEST(PipelineContracts, OverlapWindowsReuseRingSlotsWithoutCopyingPayloads)
+// Verifies overlapping read windows reuse payload storage without copying it.
+TEST(PipelineContracts,
+     OverlapWindowsReuseRingSlotsWithoutCopyingPayloads)
 {
     takt::Pipe<CopyProbe> pipe("no-history");
     configure_pipe(pipe, 3, CopyProbe{}, 2, 1, 3);
@@ -153,7 +185,9 @@ TEST(PipelineContracts, OverlapWindowsReuseRingSlotsWithoutCopyingPayloads)
     pipe.close();
 }
 
-TEST(PipelineContracts, UnregisteredBuildersAreIndependentAndReleaseBoundNodes)
+// Verifies independent builders do not retain nodes in the named registry.
+TEST(PipelineContracts,
+     UnregisteredBuildersAreIndependentAndReleaseBoundNodes)
 {
     std::weak_ptr<takt::NodeBase> weak;
     {
@@ -168,7 +202,9 @@ TEST(PipelineContracts, UnregisteredBuildersAreIndependentAndReleaseBoundNodes)
     EXPECT_TRUE(weak.expired());
 }
 
-TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
+// Verifies closure waits for outstanding writes before signaling completion.
+TEST(PipelineContracts,
+     ClosingWaitsForReservedWriterBeforeEndOfStream)
 {
     takt::Pipe<int> pipe("pending");
     configure_pipe(pipe, 1, 0);
@@ -191,7 +227,9 @@ TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
     EXPECT_THROW((void)pipe.acquire_read(), takt::PipeClosedAndEmptySignal);
 }
 
-TEST(PipelineContracts, ClosedUnterminatedShotDrainsPartialWindowWithoutShotEnd)
+// Verifies an unterminated closed shot drains without inventing a final marker.
+TEST(PipelineContracts,
+     ClosedUnterminatedShotDrainsPartialWindowWithoutShotEnd)
 {
     takt::Pipe<int> pipe("partial-unended-tail");
     configure_pipe(pipe, 3, 0, 3, 0, 1);
@@ -214,7 +252,9 @@ TEST(PipelineContracts, ClosedUnterminatedShotDrainsPartialWindowWithoutShotEnd)
     EXPECT_THROW((void)pipe.acquire_read(), takt::PipeClosedAndEmptySignal);
 }
 
-TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveWindows)
+// Verifies concurrent readable windows keep distinct consecutive storage.
+TEST(PipelineContracts,
+     MultipleReadTokensRetainTheirOwnConsecutiveWindows)
 {
     takt::Pipe<int> pipe("retained-reads");
     configure_pipe(pipe, 2, 0);
@@ -239,7 +279,9 @@ TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveWindows)
     EXPECT_EQ(reader.get(), 2);
 }
 
-TEST(PipelineContracts, ErrorClosureDrainsUnterminatedPrefixAndPendingWrites)
+// Verifies failure closure preserves readable committed and pending prefixes.
+TEST(PipelineContracts,
+     ErrorClosureDrainsUnterminatedPrefixAndPendingWrites)
 {
     takt::Pipe<int> pipe("error-prefix");
     configure_pipe(pipe, 3, 0);
@@ -273,7 +315,9 @@ TEST(PipelineContracts, ErrorClosureDrainsUnterminatedPrefixAndPendingWrites)
     EXPECT_THROW(pipe.close_with_error(""), std::invalid_argument);
 }
 
-TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
+// Verifies a cancelled middle reservation blocks publication across the gap.
+TEST(PipelineContracts,
+     AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
 {
     takt::Pipe<int> pipe("gap");
     configure_pipe(pipe, 3, 0);
@@ -297,7 +341,9 @@ TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
     EXPECT_THROW((void)pipe.acquire_read(), takt::PipeFaultedError);
 }
 
-TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
+// Verifies typed bridges swap vector storage rather than copying payloads.
+TEST(PipelineContracts,
+     TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
 {
     auto input = make_configured_pipe("bridge-in", 1, Frame(16));
     auto output = make_configured_pipe("bridge-out", 1, Frame(16));
@@ -325,13 +371,16 @@ TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
     }
     auto mismatch =
         takt::make_pipe_endpoint(std::make_shared<takt::Pipe<double>>("other"));
-    EXPECT_THROW(source->transfer_to(*mismatch), takt::PipeEndpointTypeMismatchError);
+    EXPECT_THROW(source->transfer_to(*mismatch),
+                 takt::PipeEndpointTypeMismatchError);
     source->close_with_error("bridge fault");
     EXPECT_THROW(source->transfer_to(*target), takt::PipeFaultedError);
     target->close();
 }
 
-TEST(PipelineContracts, NodeAdmissionIsBoundedWhileWorkerIsBusy)
+// Verifies ingress cannot exceed bounded task admission while workers block.
+TEST(PipelineContracts,
+     NodeAdmissionIsBoundedWhileWorkerIsBusy)
 {
     std::promise<void> release;
     BlockedNode node(release.get_future().share());
@@ -346,7 +395,9 @@ TEST(PipelineContracts, NodeAdmissionIsBoundedWhileWorkerIsBusy)
     EXPECT_EQ(node.built.load(), 4);
 }
 
-TEST(PipelineContracts, TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
+// Verifies token-owned frames drain and processing failures reach runtime join.
+TEST(PipelineContracts,
+     TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
 {
     for (bool failure : {false, true})
     {
@@ -360,23 +411,24 @@ TEST(PipelineContracts, TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
         takt::PipelineRuntime runtime({node});
         runtime.initialize();
         runtime.start();
-        auto producer = std::async(std::launch::async,
-                                   [&input]
-                                   {
-                                       try
-                                       {
-                                           for (int i = 1; i <= 4; ++i)
-                                           {
-                                               auto write = input.acquire_shot_end_write(1);
-                                               write.value()[0] = static_cast<float>(i);
-                                               write.publish();
-                                           }
-                                           input.close();
-                                       }
-                                       catch (const takt::PipeFaultedError&)
-                                       {
-                                       }
-                                   });
+        auto producer =
+            std::async(std::launch::async,
+                       [&input]
+                       {
+                           try
+                           {
+                               for (int i = 1; i <= 4; ++i)
+                               {
+                                   auto write = input.acquire_shot_end_write(1);
+                                   write.value()[0] = static_cast<float>(i);
+                                   write.publish();
+                               }
+                               input.close();
+                           }
+                           catch (const takt::PipeFaultedError&)
+                           {
+                           }
+                       });
         size_t completed = 0;
         bool faulted = false;
         while (true)
@@ -385,7 +437,8 @@ TEST(PipelineContracts, TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
             {
                 auto read = output.acquire_read();
                 ++completed;
-                EXPECT_EQ(read.value()[0], static_cast<float>(completed) * 2.0F);
+                EXPECT_EQ(read.value()[0],
+                          static_cast<float>(completed) * 2.0F);
             }
             catch (const takt::PipeClosedAndEmptySignal&)
             {

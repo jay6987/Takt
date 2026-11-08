@@ -1,3 +1,4 @@
+// Manages bounded frame slots and synchronized read/write token lifetimes.
 #pragma once
 
 #include <condition_variable>
@@ -12,11 +13,15 @@ namespace takt
 {
 struct PipeClosedAndEmptySignal : public std::runtime_error
 {
-    PipeClosedAndEmptySignal() : std::runtime_error("pipe is closed and empty") {}
+    // Signals normal completion after a closed pipe has been drained.
+    PipeClosedAndEmptySignal() : std::runtime_error("pipe is closed and empty")
+    {
+    }
 };
 
 struct PipeUnterminatedShotError : public std::runtime_error
 {
+    // Carries diagnostic context for closure without a shot-end marker.
     explicit PipeUnterminatedShotError(const std::string& message)
         : std::runtime_error(message)
     {
@@ -25,13 +30,16 @@ struct PipeUnterminatedShotError : public std::runtime_error
 
 struct PipeFaultedError : public std::runtime_error
 {
-    explicit PipeFaultedError(const std::string& message) : std::runtime_error(message)
+    // Carries the pipe's terminal failure message.
+    explicit PipeFaultedError(const std::string& message)
+        : std::runtime_error(message)
     {
     }
 };
 
 struct PipeWriteAbandonedError : public PipeFaultedError
 {
+    // Identifies a cancelled write that blocks ordered publication.
     explicit PipeWriteAbandonedError(const std::string& message)
         : PipeFaultedError(message)
     {
@@ -62,26 +70,46 @@ struct PipeCoreFrameWindow
 class PipeCore
 {
   public:
-    PipeCore(std::string name, size_t slot_capacity, size_t retained_overlap_frames,
+    // Creates bounded synchronized slot bookkeeping for configured batching.
+    PipeCore(std::string name,
+             size_t slot_capacity,
+             size_t retained_overlap_frames,
              size_t max_frames_per_write);
 
+    // Synchronization and token identity cannot be copied.
     PipeCore(const PipeCore&) = delete;
+    // Prevents replacement of bookkeeping referenced by active tokens.
     PipeCore& operator=(const PipeCore&) = delete;
 
+    // Returns the diagnostic pipe name.
     const std::string& name() const noexcept;
+    // Returns the immutable number of frame slots.
     size_t slot_capacity() const noexcept;
 
+    // Returns frames visible to readers under synchronization.
     size_t queued_frame_count() const noexcept;
+    // Reports terminal closure under synchronization.
     bool closed() const noexcept;
+    // Reports a retained terminal fault under synchronization.
     bool faulted() const noexcept;
+    // Returns the retained terminal fault message.
     std::string fault_message() const;
+    // Closes the core and wakes blocked readers and writers.
     void close();
+    // Closes with a nonempty message while retaining the first fault.
     void close_with_error(std::string message);
 
-    PipeCoreWriteReservation reserve_write(size_t frame_count, bool is_shot_end);
-    void release_write_reservation(size_t token_id, bool published);
+    // Reserves a valid batch in producer order, waiting for reusable slots.
+    PipeCoreWriteReservation reserve_write(size_t frame_count,
+                                           bool is_shot_end);
+    // Commits a released batch in order or marks abandoned publication.
+    void release_write_reservation(size_t token_id,
+                                   bool published);
 
-    PipeCoreFrameWindow acquire_read_window(size_t frames_per_read, size_t overlap_frames);
+    // Waits for a shot-bounded read window including configured overlap.
+    PipeCoreFrameWindow acquire_read_window(size_t frames_per_read,
+                                            size_t overlap_frames);
+    // Releases a read window and reclaims slots in read reservation order.
     void release_read_window(size_t token_id);
 
   private:
@@ -104,14 +132,23 @@ class PipeCore
         bool released = false;
     };
 
+    // Maps an absolute frame index into bounded circular storage.
     size_t frame_index_to_slot(size_t frame_index) const noexcept;
+    // Finds the first frame no longer needed for retained overlap.
     size_t reusable_frame_start_locked() const noexcept;
+    // Publishes consecutive released writes while the mutex is held.
     void flush_released_writes_locked();
+    // Reclaims consecutive released reads while the mutex is held.
     void flush_released_reads_locked();
+    // Throws the appropriate terminal fault or normal completion signal.
     [[noreturn]] void throw_terminal_locked() const;
+    // Finds the next committed shot boundary after the read position.
     size_t next_shot_end_frame_locked() const;
+    // Returns the publication frontier, accounting for blocked writes.
     size_t visible_frame_end_locked() const;
+    // Looks up a pending write or rejects an unknown token.
     PendingWrite& find_write_locked(size_t token_id);
+    // Looks up a pending read or rejects an unknown token.
     PendingRead& find_read_locked(size_t token_id);
 
     std::string name_;

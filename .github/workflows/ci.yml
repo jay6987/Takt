@@ -16,6 +16,22 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install LLVM 23
+        run: |
+          curl --fail --silent --show-error https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/llvm-key.asc
+          sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm-key.asc
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-23 clang-format-23 llvm-23 libclang-23-dev
+      - name: Source contracts, coverage, ASan, UBSan and TSan
+        run: cmake -P scripts/quality.cmake
+
   build-and-test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

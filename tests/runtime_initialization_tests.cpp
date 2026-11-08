@@ -1,3 +1,4 @@
+// Verifies runtime tree initialization, lifecycle ordering and startup errors.
 #include "takt/takt.h"
 
 #include <gtest/gtest.h>
@@ -11,13 +12,18 @@ namespace
 class Probe : public takt::NodeBase
 {
   public:
+    // Creates an inert node for lifecycle-tree tests.
     Probe() : NodeBase("probe") {}
+    // Records startup without launching background work.
     void start() override
     {
         ++starts;
     }
+    // Completes immediately because this probe owns no workers.
     void join() override {}
-    std::vector<std::shared_ptr<takt::PipelineRuntime>> child_runtimes() const override
+    // Returns configurable child runtimes for tree-validation scenarios.
+    std::vector<std::shared_ptr<takt::PipelineRuntime>>
+    child_runtimes() const override
     {
         return children;
     }
@@ -28,6 +34,7 @@ class Probe : public takt::NodeBase
 class FailingStart final : public Probe
 {
   public:
+    // Injects a deterministic startup failure after prior nodes start.
     void start() override
     {
         throw std::runtime_error("startup failure");
@@ -37,28 +44,34 @@ class FailingStart final : public Probe
 class CountingPipe final : public takt::PipeBase
 {
   public:
+    // Configures a same-name pipe to test identity-based deduplication.
     CountingPipe() : PipeBase("same-name")
     {
         set_producer_config(
             {"producer", takt::concurrency(1), takt::frames_per_write(1)});
-        set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                      takt::overlap_frames(0)});
+        set_consumer({"consumer", takt::concurrency(1),
+                      takt::frames_per_read(1), takt::overlap_frames(0)});
     }
+    // Keeps this synthetic pipe open during lifecycle tests.
     bool closed() const noexcept override
     {
         return false;
     }
+    // Reports no synthetic runtime fault.
     bool faulted() const noexcept override
     {
         return false;
     }
+    // Leaves synthetic storage untouched when runtime cleanup closes pipes.
     void close() override {}
+    // Validates common settings and optionally injects a configuration failure.
     void validate_configuration() const override
     {
         validate_common();
         if (invalid)
             throw std::logic_error("invalid configuration");
     }
+    // Counts initialization and optionally injects an allocation failure.
     void initialize() override
     {
         validate_configuration();
@@ -72,7 +85,9 @@ class CountingPipe final : public takt::PipeBase
     int initializations = 0;
 };
 
-TEST(RuntimeInitialization, ExplicitPhaseAndEmptyRuntime)
+// Verifies explicit initialization is required even for an empty runtime.
+TEST(RuntimeInitialization,
+     ExplicitPhaseAndEmptyRuntime)
 {
     auto probe = std::make_shared<Probe>();
     takt::PipelineRuntime runtime({probe});
@@ -86,12 +101,15 @@ TEST(RuntimeInitialization, ExplicitPhaseAndEmptyRuntime)
     EXPECT_EQ(probe->starts, 1);
 }
 
-TEST(RuntimeInitialization, StopBeforeInitializationCancelsRegisteredPipes)
+// Verifies early cancellation prevents registered pipe initialization.
+TEST(RuntimeInitialization,
+     StopBeforeInitializationCancelsRegisteredPipes)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("cancelled");
-    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-    pipe->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    pipe->set_producer(
+        {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe->set_consumer({"sink", takt::concurrency(1), takt::frames_per_read(1),
+                        takt::overlap_frames(0)});
     auto probe = std::make_shared<Probe>();
     takt::PipelineRuntime runtime({probe}, {pipe});
     runtime.request_stop();
@@ -101,7 +119,9 @@ TEST(RuntimeInitialization, StopBeforeInitializationCancelsRegisteredPipes)
     EXPECT_EQ(probe->starts, 0);
 }
 
-TEST(RuntimeInitialization, WholeTreeDeduplicatesIdentityNotNames)
+// Verifies preparation deduplicates pipe objects rather than diagnostic names.
+TEST(RuntimeInitialization,
+     WholeTreeDeduplicatesIdentityNotNames)
 {
     auto shared = std::make_shared<CountingPipe>();
     auto different = std::make_shared<CountingPipe>();
@@ -124,7 +144,9 @@ TEST(RuntimeInitialization, WholeTreeDeduplicatesIdentityNotNames)
     EXPECT_EQ(outer->starts + first->starts + second->starts, 0);
 }
 
-TEST(RuntimeInitialization, ConfigurationFailureAllocatesNothing)
+// Verifies full-tree validation precedes allocation of any frame storage.
+TEST(RuntimeInitialization,
+     ConfigurationFailureAllocatesNothing)
 {
     auto good = std::make_shared<CountingPipe>();
     auto bad = std::make_shared<CountingPipe>();
@@ -140,7 +162,9 @@ TEST(RuntimeInitialization, ConfigurationFailureAllocatesNothing)
     EXPECT_NO_THROW(runtime.join());
 }
 
-TEST(RuntimeInitialization, AllocationFailureIsTerminalAndRetainsCause)
+// Verifies failed allocation leaves a terminal runtime with its original cause.
+TEST(RuntimeInitialization,
+     AllocationFailureIsTerminalAndRetainsCause)
 {
     auto good = std::make_shared<CountingPipe>();
     auto bad = std::make_shared<CountingPipe>();
@@ -162,7 +186,9 @@ TEST(RuntimeInitialization, AllocationFailureIsTerminalAndRetainsCause)
     EXPECT_EQ(probe->starts, 0);
 }
 
-TEST(RuntimeInitialization, FailedRuntimeDoesNotRetainPipesBeyondItsOwner)
+// Verifies failed initialization does not leak lifecycle pipe ownership.
+TEST(RuntimeInitialization,
+     FailedRuntimeDoesNotRetainPipesBeyondItsOwner)
 {
     std::weak_ptr<CountingPipe> weak;
     {
@@ -177,7 +203,10 @@ TEST(RuntimeInitialization, FailedRuntimeDoesNotRetainPipesBeyondItsOwner)
     EXPECT_TRUE(weak.expired());
 }
 
-TEST(RuntimeInitialization, PartialStartupStopsNodesAndPreservesFailure)
+// Verifies partial startup stops earlier nodes and reports the starting
+// failure.
+TEST(RuntimeInitialization,
+     PartialStartupStopsNodesAndPreservesFailure)
 {
     auto started = std::make_shared<Probe>();
     auto failing = std::make_shared<FailingStart>();
@@ -190,12 +219,15 @@ TEST(RuntimeInitialization, PartialStartupStopsNodesAndPreservesFailure)
     EXPECT_NO_THROW(runtime.join());
 }
 
-TEST(RuntimeInitialization, ReadyPipeCanBeAdoptedButTerminalPipeCannot)
+// Verifies runtime adoption accepts initialized pipes but rejects closed pipes.
+TEST(RuntimeInitialization,
+     ReadyPipeCanBeAdoptedButTerminalPipeCannot)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("ready");
-    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-    pipe->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    pipe->set_producer(
+        {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe->set_consumer({"sink", takt::concurrency(1), takt::frames_per_read(1),
+                        takt::overlap_frames(0)});
     pipe->initialize();
     takt::PipelineRuntime runtime({}, {pipe});
     EXPECT_NO_THROW(runtime.initialize());
@@ -204,7 +236,9 @@ TEST(RuntimeInitialization, ReadyPipeCanBeAdoptedButTerminalPipeCannot)
     EXPECT_THROW(terminal.initialize(), std::logic_error);
 }
 
-TEST(RuntimeInitialization, StopClosesEveryPipeBeforeReportingUnterminatedShot)
+// Verifies stop attempts every pipe closure before propagating a shot error.
+TEST(RuntimeInitialization,
+     StopClosesEveryPipeBeforeReportingUnterminatedShot)
 {
     auto first = std::make_shared<takt::Pipe<int>>("unfinished-first");
     auto second = std::make_shared<takt::Pipe<int>>("unfinished-second");
@@ -212,8 +246,8 @@ TEST(RuntimeInitialization, StopClosesEveryPipeBeforeReportingUnterminatedShot)
     {
         pipe->set_producer(
             {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-        pipe->set_consumer(
-            {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+        pipe->set_consumer({"sink", takt::concurrency(1),
+                            takt::frames_per_read(1), takt::overlap_frames(0)});
         pipe->set_slot_capacity(2);
         pipe->initialize();
         auto write = pipe->acquire_write();
@@ -229,12 +263,15 @@ TEST(RuntimeInitialization, StopClosesEveryPipeBeforeReportingUnterminatedShot)
     EXPECT_NO_THROW(runtime.join());
 }
 
-TEST(RuntimeInitialization, EndpointWrappersReferToSamePreparedObject)
+// Verifies multiple adapters retain the same initialized backing pipe.
+TEST(RuntimeInitialization,
+     EndpointWrappersReferToSamePreparedObject)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("connection");
-    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-    pipe->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    pipe->set_producer(
+        {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe->set_consumer({"sink", takt::concurrency(1), takt::frames_per_read(1),
+                        takt::overlap_frames(0)});
     auto graph = takt::PipelineBuilder::create("graph");
     auto source = std::make_shared<Probe>();
     auto sink = std::make_shared<Probe>();
@@ -254,7 +291,9 @@ TEST(RuntimeInitialization, EndpointWrappersReferToSamePreparedObject)
     EXPECT_EQ(source->starts + sink->starts, 0);
 }
 
-TEST(RuntimeInitialization, InvalidEndpointDescriptorFailsBeforeRuntimeCreation)
+// Verifies invalid endpoint metadata prevents executable runtime construction.
+TEST(RuntimeInitialization,
+     InvalidEndpointDescriptorFailsBeforeRuntimeCreation)
 {
     auto graph = takt::PipelineBuilder::create("invalid-endpoint");
     graph.add_node("node");
@@ -263,7 +302,9 @@ TEST(RuntimeInitialization, InvalidEndpointDescriptorFailsBeforeRuntimeCreation)
     EXPECT_THROW(graph.build_runtime(), std::logic_error);
 }
 
-TEST(RuntimeInitialization, CyclesAndSharedNodeOwnershipAreRejected)
+// Verifies executable runtime trees reject cycles and shared node ownership.
+TEST(RuntimeInitialization,
+     CyclesAndSharedNodeOwnershipAreRejected)
 {
     auto probe = std::make_shared<Probe>();
     auto runtime = std::make_shared<takt::PipelineRuntime>(
@@ -282,7 +323,9 @@ TEST(RuntimeInitialization, CyclesAndSharedNodeOwnershipAreRejected)
     EXPECT_EQ(probe->starts + outer->starts, 0);
 }
 
-TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
+// Verifies both bridge sides are prepared with the nested runtime tree.
+TEST(RuntimeInitialization,
+     BridgePipesAreIncludedInInnerRuntimePreparation)
 {
     auto source = std::make_shared<takt::Pipe<int>>("outer");
     auto target = std::make_shared<takt::Pipe<int>>("inner");
@@ -290,18 +333,19 @@ TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
     {
         pipe->set_producer(
             {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-        pipe->set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                            takt::overlap_frames(0)});
+        pipe->set_consumer({"consumer", takt::concurrency(1),
+                            takt::frames_per_read(1), takt::overlap_frames(0)});
     }
     auto inner = std::make_shared<takt::PipelineRuntime>(
         std::vector<std::shared_ptr<takt::NodeBase>>{});
     auto subgraph = std::make_shared<takt::SubgraphNode>(
         "subgraph", inner,
-        std::unordered_map<std::string, takt::NodePortRef>{{"in", {"node", "in"}}},
+        std::unordered_map<std::string, takt::NodePortRef>{
+            {"in", {"node", "in"}}},
         std::unordered_map<std::string, takt::NodePortRef>{},
-        std::vector<takt::SubgraphNode::BridgeLink>{{takt::make_pipe_endpoint(source),
-                                                     takt::make_pipe_endpoint(target),
-                                                     "outer.in", "inner.in"}});
+        std::vector<takt::SubgraphNode::BridgeLink>{
+            {takt::make_pipe_endpoint(source), takt::make_pipe_endpoint(target),
+             "outer.in", "inner.in"}});
     takt::PipelineRuntime root({subgraph}, {source});
     root.initialize();
     EXPECT_TRUE(inner->initialized());
@@ -309,12 +353,15 @@ TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
     EXPECT_TRUE(target->initialized());
 }
 
-TEST(RuntimeInitialization, ConfiguredOverlapReadsRetainedRingSlots)
+// Verifies configured overlap exposes retained circular-buffer frames.
+TEST(RuntimeInitialization,
+     ConfiguredOverlapReadsRetainedRingSlots)
 {
     takt::Pipe<int> pipe("overlap");
-    pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
-    pipe.set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(2), takt::overlap_frames(1)});
+    pipe.set_producer(
+        {"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
+    pipe.set_consumer({"sink", takt::concurrency(1), takt::frames_per_read(2),
+                       takt::overlap_frames(1)});
     pipe.set_slot_capacity(3);
     pipe.initialize();
     {

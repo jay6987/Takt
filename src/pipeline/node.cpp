@@ -1,3 +1,4 @@
+// Runs bounded node ingress and workers with coordinated stop propagation.
 #include "takt/pipeline/node.h"
 
 #include <exception>
@@ -11,6 +12,7 @@ namespace takt
 {
 namespace
 {
+// Joins port labels for structured exception logging.
 std::string join_names(const std::vector<std::string>& names)
 {
     std::ostringstream oss;
@@ -117,10 +119,11 @@ void NodeBase::remember_failure(std::exception_ptr failure)
     }
 }
 
-NodeExceptionContext NodeBase::build_exception_context(std::string message,
-                                                       bool unknown_exception,
-                                                       bool has_worker_index,
-                                                       size_t worker_index) const
+NodeExceptionContext
+NodeBase::build_exception_context(std::string message,
+                                  bool unknown_exception,
+                                  bool has_worker_index,
+                                  size_t worker_index) const
 {
     NodeExceptionContext context;
     context.pipeline_name = pipeline_name_;
@@ -136,8 +139,11 @@ NodeExceptionContext NodeBase::build_exception_context(std::string message,
     return context;
 }
 
-Node::Node(std::string node_name, size_t worker_count, size_t task_queue_capacity)
-    : NodeBase(std::move(node_name)), worker_count_(worker_count),
+Node::Node(std::string node_name,
+           size_t worker_count,
+           size_t task_queue_capacity)
+    : NodeBase(std::move(node_name)),
+      worker_count_(worker_count),
       task_queue_capacity_(task_queue_capacity)
 {
     if (worker_count_ == 0)
@@ -169,14 +175,14 @@ void Node::start()
         task_queue_closed_ = false;
     }
 
-    ingress_manager_ =
-        std::async(std::launch::async, [this] { run_ingress_manager_wrapped(); });
+    ingress_manager_ = std::async(std::launch::async,
+                                  [this] { run_ingress_manager_wrapped(); });
 
     workers_.reserve(worker_count_);
     for (size_t i = 0; i < worker_count_; ++i)
     {
-        workers_.emplace_back(
-            std::async(std::launch::async, [this, i] { run_worker_wrapped(i); }));
+        workers_.emplace_back(std::async(std::launch::async,
+                                         [this, i] { run_worker_wrapped(i); }));
     }
 }
 
@@ -213,7 +219,8 @@ size_t Node::task_queue_capacity() const noexcept
     return task_queue_capacity_;
 }
 
-void Node::on_task_done(size_t worker_index, const Task& task)
+void Node::on_task_done(size_t worker_index,
+                        const Task& task)
 {
     (void)worker_index;
     (void)task;
@@ -284,7 +291,8 @@ void Node::run_ingress_manager_wrapped()
     catch (...)
     {
         remember_failure(std::current_exception());
-        on_exception(build_exception_context("unknown exception", true, false, 0));
+        on_exception(
+            build_exception_context("unknown exception", true, false, 0));
     }
 
     close_task_queue();
@@ -294,18 +302,20 @@ void Node::run_ingress_manager_wrapped()
 bool Node::wait_for_task_admission()
 {
     std::unique_lock<std::mutex> lk(task_queue_mutex_);
-    task_queue_cv_.wait(lk, [this]
-    {
-        return task_queue_closed_ || task_queue_.size() < task_queue_capacity_;
-    });
+    task_queue_cv_.wait(lk,
+                        [this]
+                        {
+                            return task_queue_closed_ ||
+                                   task_queue_.size() < task_queue_capacity_;
+                        });
     return !task_queue_closed_;
 }
 
 bool Node::pop_task(std::unique_ptr<Task>& task)
 {
     std::unique_lock<std::mutex> lk(task_queue_mutex_);
-    task_queue_cv_.wait(
-        lk, [this] { return task_queue_closed_ || !task_queue_.empty(); });
+    task_queue_cv_.wait(lk, [this]
+                        { return task_queue_closed_ || !task_queue_.empty(); });
     if (task_queue_.empty())
     {
         return false;
@@ -365,7 +375,8 @@ void Node::run_worker_wrapped(size_t worker_index)
             }
             catch (...)
             {
-                // Capture the cause before token cleanup wakes other failing threads.
+                // Capture the cause before token cleanup wakes other failing
+                // threads.
                 remember_failure(std::current_exception());
                 throw;
             }
@@ -378,8 +389,8 @@ void Node::run_worker_wrapped(size_t worker_index)
         request_stop();
         discard_task_queue();
         const bool has_worker_index = worker_count_ > 1;
-        on_exception(
-            build_exception_context(e.what(), false, has_worker_index, worker_index));
+        on_exception(build_exception_context(e.what(), false, has_worker_index,
+                                             worker_index));
     }
     catch (...)
     {

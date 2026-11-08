@@ -1,6 +1,7 @@
 add_executable(takt_recordreplay_example
     main.cpp
 )
+takt_warnings(takt_recordreplay_example)
 
 target_link_libraries(takt_recordreplay_example
     PRIVATE

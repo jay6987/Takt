@@ -1,3 +1,4 @@
+// Implements synchronized slot reservation, window release and pipe closure.
 #include "takt/pipeline/pipe_core.h"
 
 #include <algorithm>
@@ -5,9 +6,12 @@
 
 namespace takt
 {
-PipeCore::PipeCore(std::string name, size_t slot_capacity, size_t retained_overlap_frames,
+PipeCore::PipeCore(std::string name,
+                   size_t slot_capacity,
+                   size_t retained_overlap_frames,
                    size_t max_frames_per_write)
-    : name_(std::move(name)), slot_capacity_(slot_capacity),
+    : name_(std::move(name)),
+      slot_capacity_(slot_capacity),
       retained_overlap_frames_(retained_overlap_frames),
       max_frames_per_write_(max_frames_per_write)
 {
@@ -66,8 +70,8 @@ void PipeCore::close()
     }
     if (report_unterminated)
     {
-        throw PipeUnterminatedShotError(
-            "pipe '" + name_ + "' closed with an unterminated Shot");
+        throw PipeUnterminatedShotError("pipe '" + name_ +
+                                        "' closed with an unterminated Shot");
     }
 }
 
@@ -87,7 +91,8 @@ void PipeCore::close_with_error(std::string message)
     cv_.notify_all();
 }
 
-PipeCoreWriteReservation PipeCore::reserve_write(size_t frame_count, bool is_shot_end)
+PipeCoreWriteReservation PipeCore::reserve_write(size_t frame_count,
+                                                 bool is_shot_end)
 {
     if (frame_count == 0)
     {
@@ -95,7 +100,8 @@ PipeCoreWriteReservation PipeCore::reserve_write(size_t frame_count, bool is_sho
     }
     if (frame_count > slot_capacity_)
     {
-        throw std::invalid_argument("write frame count cannot exceed slot capacity");
+        throw std::invalid_argument(
+            "write frame count cannot exceed slot capacity");
     }
     if (frame_count > max_frames_per_write_)
     {
@@ -129,21 +135,21 @@ PipeCoreWriteReservation PipeCore::reserve_write(size_t frame_count, bool is_sho
     reservation.slots.reserve(frame_count);
     for (size_t i = 0; i < frame_count; ++i)
     {
-        reservation.slots.push_back(frame_index_to_slot(write_reserved_frame_end_ + i));
+        reservation.slots.push_back(
+            frame_index_to_slot(write_reserved_frame_end_ + i));
     }
 
-    pending_writes_.push_back(PendingWrite{reservation.token_id,
-                                           reservation.start_frame_index, frame_count,
-                                           reservation.is_shot_start,
-                                           reservation.is_shot_end,
-                                           false, false});
+    pending_writes_.push_back(PendingWrite{
+        reservation.token_id, reservation.start_frame_index, frame_count,
+        reservation.is_shot_start, reservation.is_shot_end, false, false});
     write_reserved_frame_end_ += frame_count;
     next_write_is_shot_start_ = is_shot_end;
 
     return reservation;
 }
 
-void PipeCore::release_write_reservation(size_t token_id, bool published)
+void PipeCore::release_write_reservation(size_t token_id,
+                                         bool published)
 {
     std::lock_guard<std::mutex> lk(mutex_);
     auto& token = find_write_locked(token_id);
@@ -167,12 +173,14 @@ PipeCoreFrameWindow PipeCore::acquire_read_window(size_t frames_per_read,
     }
     if (overlap_frames > retained_overlap_frames_)
     {
-        throw std::invalid_argument("requested overlap exceeds configured retention");
+        throw std::invalid_argument(
+            "requested overlap exceeds configured retention");
     }
 
     const size_t required_new_frame_count = frames_per_read - overlap_frames;
 
-    auto calc_read_end_frame_index = [this](size_t start_frame_index, size_t wanted_size) -> size_t
+    auto calc_read_end_frame_index = [this](size_t start_frame_index,
+                                            size_t wanted_size) -> size_t
     {
         const size_t read_end_frame_index = visible_frame_end_locked();
         if (read_end_frame_index == 0)
@@ -184,55 +192,64 @@ PipeCoreFrameWindow PipeCore::acquire_read_window(size_t frames_per_read,
 
     std::unique_lock<std::mutex> lk(mutex_);
     const size_t available_overlap =
-        std::min(overlap_frames, read_reserved_frame_end_ - read_shot_start_frame_index_);
+        std::min(overlap_frames,
+                 read_reserved_frame_end_ - read_shot_start_frame_index_);
     if (frames_per_read - available_overlap > slot_capacity_)
     {
-        throw std::invalid_argument("new read slots cannot exceed pipe capacity");
+        throw std::invalid_argument(
+            "new read slots cannot exceed pipe capacity");
     }
-    cv_.wait(
-        lk,
-        [this, frames_per_read, overlap_frames, required_new_frame_count,
-         &calc_read_end_frame_index]
-        {
-            if (closed_ && pending_writes_.empty())
-            {
-                return true;
-            }
-            if (visible_frame_end_locked() == 0)
-            {
-                return false;
-            }
+    cv_.wait(lk,
+             [this, frames_per_read, overlap_frames, required_new_frame_count,
+              &calc_read_end_frame_index]
+             {
+                 if (closed_ && pending_writes_.empty())
+                 {
+                     return true;
+                 }
+                 if (visible_frame_end_locked() == 0)
+                 {
+                     return false;
+                 }
 
-            const size_t read_start_frame_index =
-                std::max(read_shot_start_frame_index_, read_reserved_frame_end_ > overlap_frames
-                                                      ? read_reserved_frame_end_ - overlap_frames
-                                                      : 0);
-            const size_t read_end_frame_index = calc_read_end_frame_index(read_start_frame_index, frames_per_read);
-            const size_t frame_count = read_end_frame_index - read_start_frame_index;
-            const size_t actual_overlap = read_reserved_frame_end_ - read_start_frame_index;
-            const size_t new_frame_count = frame_count - actual_overlap;
-            const bool hit_shot_end =
-                next_shot_end_frame_locked() != 0 &&
-                read_end_frame_index == next_shot_end_frame_locked();
+                 const size_t read_start_frame_index =
+                     std::max(read_shot_start_frame_index_,
+                              read_reserved_frame_end_ > overlap_frames
+                                  ? read_reserved_frame_end_ - overlap_frames
+                                  : 0);
+                 const size_t read_end_frame_index = calc_read_end_frame_index(
+                     read_start_frame_index, frames_per_read);
+                 const size_t frame_count =
+                     read_end_frame_index - read_start_frame_index;
+                 const size_t actual_overlap =
+                     read_reserved_frame_end_ - read_start_frame_index;
+                 const size_t new_frame_count = frame_count - actual_overlap;
+                 const bool hit_shot_end =
+                     next_shot_end_frame_locked() != 0 &&
+                     read_end_frame_index == next_shot_end_frame_locked();
 
-            // Return a short final window at ShotEnd instead of waiting for a
-            // full window that cannot be completed within this Shot.
-            return new_frame_count >= required_new_frame_count ||
-                   (hit_shot_end && new_frame_count > 0) ||
-                   (closed_ && new_frame_count > 0);
-        });
+                 // Return a short final window at ShotEnd instead of waiting
+                 // for a full window that cannot be completed within this Shot.
+                 return new_frame_count >= required_new_frame_count ||
+                        (hit_shot_end && new_frame_count > 0) ||
+                        (closed_ && new_frame_count > 0);
+             });
 
     if (visible_frame_end_locked() == 0)
     {
         throw_terminal_locked();
     }
 
-    const size_t read_start_frame_index = std::max(
-        read_shot_start_frame_index_,
-        read_reserved_frame_end_ > overlap_frames ? read_reserved_frame_end_ - overlap_frames : 0);
-    const size_t read_end_frame_index = calc_read_end_frame_index(read_start_frame_index, frames_per_read);
+    const size_t read_start_frame_index =
+        std::max(read_shot_start_frame_index_,
+                 read_reserved_frame_end_ > overlap_frames
+                     ? read_reserved_frame_end_ - overlap_frames
+                     : 0);
+    const size_t read_end_frame_index =
+        calc_read_end_frame_index(read_start_frame_index, frames_per_read);
     const size_t frame_count = read_end_frame_index - read_start_frame_index;
-    const size_t actual_overlap = read_reserved_frame_end_ - read_start_frame_index;
+    const size_t actual_overlap =
+        read_reserved_frame_end_ - read_start_frame_index;
     const size_t new_frame_count = frame_count - actual_overlap;
 
     if (new_frame_count == 0)
@@ -246,19 +263,20 @@ PipeCoreFrameWindow PipeCore::acquire_read_window(size_t frames_per_read,
     window.frame_count = frame_count;
     window.overlap_frames = actual_overlap;
     window.new_frame_count = new_frame_count;
-    window.is_shot_start = (read_start_frame_index == read_shot_start_frame_index_);
-    window.is_shot_end =
-        next_shot_end_frame_locked() != 0 &&
-        read_end_frame_index == next_shot_end_frame_locked();
+    window.is_shot_start =
+        (read_start_frame_index == read_shot_start_frame_index_);
+    window.is_shot_end = next_shot_end_frame_locked() != 0 &&
+                         read_end_frame_index == next_shot_end_frame_locked();
     window.slots.reserve(new_frame_count);
 
     for (size_t i = 0; i < new_frame_count; ++i)
     {
-        window.slots.push_back(frame_index_to_slot(read_reserved_frame_end_ + i));
+        window.slots.push_back(
+            frame_index_to_slot(read_reserved_frame_end_ + i));
     }
 
-    pending_reads_.push_back(
-        PendingRead{window.token_id, read_start_frame_index, new_frame_count, false});
+    pending_reads_.push_back(PendingRead{
+        window.token_id, read_start_frame_index, new_frame_count, false});
     read_reserved_frame_end_ += new_frame_count;
 
     if (window.is_shot_end)
@@ -285,9 +303,11 @@ size_t PipeCore::frame_index_to_slot(size_t frame_index) const noexcept
 
 size_t PipeCore::reusable_frame_start_locked() const noexcept
 {
-    const size_t overlap_start = std::max(
-        read_shot_start_frame_index_,
-        read_reserved_frame_end_ > retained_overlap_frames_ ? read_reserved_frame_end_ - retained_overlap_frames_ : 0);
+    const size_t overlap_start =
+        std::max(read_shot_start_frame_index_,
+                 read_reserved_frame_end_ > retained_overlap_frames_
+                     ? read_reserved_frame_end_ - retained_overlap_frames_
+                     : 0);
     size_t reusable_pos = overlap_start;
     for (const auto& token : pending_reads_)
     {
@@ -325,11 +345,13 @@ void PipeCore::flush_released_writes_locked()
             if (!write_failure_)
             {
                 write_failure_ = true;
-                fault_message_ =
-                    "pipe '" + name_ +
-                    "' faulted because write token starting at logical position " +
-                    std::to_string(token.start_frame_index) + " with frame count " +
-                    std::to_string(token.frame_count) + " was released without publish";
+                fault_message_ = "pipe '" + name_ +
+                                 "' faulted because write token starting at "
+                                 "logical position " +
+                                 std::to_string(token.start_frame_index) +
+                                 " with frame count " +
+                                 std::to_string(token.frame_count) +
+                                 " was released without publish";
             }
         }
     }
@@ -346,8 +368,9 @@ void PipeCore::throw_terminal_locked() const
 
 size_t PipeCore::next_shot_end_frame_locked() const
 {
-    const auto end = std::upper_bound(committed_shot_ends_.begin(),
-                                      committed_shot_ends_.end(), read_reserved_frame_end_);
+    const auto end =
+        std::upper_bound(committed_shot_ends_.begin(),
+                         committed_shot_ends_.end(), read_reserved_frame_end_);
     return end == committed_shot_ends_.end() ? 0 : *end;
 }
 

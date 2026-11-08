@@ -1,5 +1,7 @@
+// Checks that public codecs compile while registry binding APIs stay private.
 #include "takt/recordreplay/recordreplay.h"
 
+// Compiles the selected public-control or forbidden registry-binding access.
 void test_registry_binding_access(takt::Pipe<int>& pipe)
 {
     using Registry = takt::recordreplay::detail::RecordReplayRegistry;

@@ -1,29 +1,34 @@
+// Demonstrates file recording and replay with scoped per-pipe bindings.
 #include <cstdio>
 #include <iostream>
 #include <string>
 
 #include "takt/takt.h"
 
+// Records example frames, replays them and verifies the restored values.
 int main()
 {
-    // Use a local file name so the example stays self-contained across toolchains.
+    // Use a local file name so the example stays self-contained across
+    // toolchains.
     const std::string file_path = "takt_recordreplay_example.bin";
 
     {
         // Phase 1: attach record behavior to this pipe.
-        // For trivially copyable payloads like int, no custom codec is required.
+        // For trivially copyable payloads like int, no custom codec is
+        // required.
         takt::Pipe<int> record_pipe("record-int");
         record_pipe.set_producer(
             {"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
-        record_pipe.set_consumer(
-            {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap_frames(0)});
+        record_pipe.set_consumer({"sink", takt::concurrency(1),
+                                  takt::frames_per_read(3),
+                                  takt::overlap_frames(0)});
         record_pipe.set_slot_capacity(8);
         record_pipe.initialize();
         auto record =
             takt::recordreplay::make_scoped_record(record_pipe, file_path);
 
-        // Write one frame group into the pipe. Recording happens when the published write
-        // token is released.
+        // Write one frame group into the pipe. Recording happens when the
+        // published write token is released.
         auto w = record_pipe.acquire_shot_end_write(3);
         w.value(0) = 101;
         w.value(1) = 202;
@@ -33,20 +38,22 @@ int main()
 
     bool ok = true;
     {
-        // Phase 2: attach replay behavior to a new pipe reading from the same file.
+        // Phase 2: attach replay behavior to a new pipe reading from the same
+        // file.
         takt::Pipe<int> replay_pipe("replay-int");
         replay_pipe.set_producer(
             {"seed", takt::concurrency(1), takt::frames_per_write(3)}, 0);
         replay_pipe.set_consumer({"replay", takt::concurrency(1),
-                                  takt::frames_per_read(3), takt::overlap_frames(0)});
+                                  takt::frames_per_read(3),
+                                  takt::overlap_frames(0)});
         replay_pipe.set_slot_capacity(8);
         replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
 
         // Reserve target slots by writing placeholders.
-        // The subsequent read path replays persisted data into these slots before
-        // exposing values.
+        // The subsequent read path replays persisted data into these slots
+        // before exposing values.
         {
             auto w = replay_pipe.acquire_shot_end_write(3);
             w.value(0) = -1;
@@ -55,8 +62,8 @@ int main()
             w.publish();
         }
 
-        // Expect replayed values to replace placeholders after the write token is
-        // released.
+        // Expect replayed values to replace placeholders after the write token
+        // is released.
         auto r = replay_pipe.acquire_read();
         ok = (r.value(0) == 101) && (r.value(1) == 202) && (r.value(2) == 303);
     }

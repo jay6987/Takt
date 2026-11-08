@@ -26,6 +26,7 @@ set(_configure_command
     -B "${_consumer_binary_dir}"
     -G "${GENERATOR}"
     "-DCMAKE_PREFIX_PATH=${_install_prefix}"
+    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 )
 if(CONFIGURATION)
     list(APPEND _configure_command "-DCMAKE_BUILD_TYPE=${CONFIGURATION}")
@@ -63,4 +64,13 @@ execute_process(
 if(NOT _build_result EQUAL 0)
     message(FATAL_ERROR
         "Building the installed-package consumer failed.\n${_build_stdout}\n${_build_stderr}")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_CTEST_COMMAND}" --test-dir "${_consumer_binary_dir}"
+        -C "${CONFIGURATION}" --output-on-failure
+    RESULT_VARIABLE _test_result
+)
+if(NOT _test_result EQUAL 0)
+    message(FATAL_ERROR "Running the installed-package consumer failed")
 endif()

@@ -1,3 +1,4 @@
+// Verifies DOT escaping, topology views and bound subgraph transport labels.
 #include "takt/takt.h"
 
 #include <gtest/gtest.h>
@@ -8,12 +9,14 @@
 
 namespace
 {
+// Returns a minimal valid source-to-sink graph for DOT variations.
 takt::PipelineGraph chain()
 {
     takt::PipelineGraph graph;
     graph.name = "test";
-    graph.nodes = {{"source", {}, {}, {{"out", takt::PortDirection::Output, {}}}},
-                   {"sink", {}, {{"in", takt::PortDirection::Input, {}}}, {}}};
+    graph.nodes = {
+        {"source", {}, {}, {{"out", takt::PortDirection::Output, {}}}},
+        {"sink", {}, {{"in", takt::PortDirection::Input, {}}}, {}}};
     graph.edges = {{"frames", "source", "out", "sink", "in", {}}};
     return graph;
 }
@@ -21,18 +24,26 @@ takt::PipelineGraph chain()
 class IdleNode final : public takt::Node
 {
   public:
+    // Creates an inert executable binding for graph-export tests.
     IdleNode() : Node("idle") {}
 
   private:
+    // Ends ingress immediately without producing processing work.
     std::unique_ptr<Task> build_task(uint64_t) override
     {
         return nullptr;
     }
-    void process_task(size_t, Task&) override {}
+    // Performs no processing because the fixture never creates tasks.
+    void process_task(size_t,
+                      Task&) override
+    {
+    }
 };
 } // namespace
 
-TEST(Graphviz, ExportsStableEscapedTopologyWithoutDescriptors)
+// Verifies stable DOT escaping without serializing arbitrary descriptors.
+TEST(Graphviz,
+     ExportsStableEscapedTopologyWithoutDescriptors)
 {
     auto graph = chain();
     graph.name = "quoted \"graph\"\\line\nnext\tcolumn\r";
@@ -50,7 +61,9 @@ TEST(Graphviz, ExportsStableEscapedTopologyWithoutDescriptors)
     EXPECT_THROW((void)takt::to_dot(graph), std::invalid_argument);
 }
 
-TEST(Graphviz, HandlesEmptyGraphsAndRejectsInvalidReferences)
+// Verifies empty export succeeds while invalid node/port references fail.
+TEST(Graphviz,
+     HandlesEmptyGraphsAndRejectsInvalidReferences)
 {
     EXPECT_NE(takt::to_dot({}).find("digraph pipeline"), std::string::npos);
     auto graph = chain();
@@ -67,7 +80,9 @@ TEST(Graphviz, HandlesEmptyGraphsAndRejectsInvalidReferences)
     EXPECT_THROW((void)takt::to_dot(graph), std::invalid_argument);
 }
 
-TEST(Graphviz, ExpandsNestedClustersWithDistinctInputAndOutputBoundaries)
+// Verifies nested clusters keep input and output boundary identities distinct.
+TEST(Graphviz,
+     ExpandsNestedClustersWithDistinctInputAndOutputBoundaries)
 {
     auto graph = chain();
     auto inner = chain();
@@ -93,7 +108,9 @@ TEST(Graphviz, ExpandsNestedClustersWithDistinctInputAndOutputBoundaries)
     EXPECT_THROW((void)takt::to_dot(graph), std::invalid_argument);
 }
 
-TEST(Graphviz, BuilderExportsUnboundGraphWithoutStartingRuntime)
+// Verifies descriptive graph export never requires execution bindings.
+TEST(Graphviz,
+     BuilderExportsUnboundGraphWithoutStartingRuntime)
 {
     auto builder = takt::PipelineBuilder::declare("dot-unbound");
     builder.add_node("source").add_output_port("source", "out");
@@ -107,7 +124,9 @@ TEST(Graphviz, BuilderExportsUnboundGraphWithoutStartingRuntime)
     EXPECT_EQ(builder.graph().nodes.size(), 3U);
 }
 
-TEST(Graphviz, BoundSubgraphSnapshotMatchesBindingAndRebindingClearsIt)
+// Verifies rebinding removes stale nested topology snapshots.
+TEST(Graphviz,
+     BoundSubgraphSnapshotMatchesBindingAndRebindingClearsIt)
 {
     auto inner = takt::PipelineBuilder::declare("dot-bound-inner");
     inner.add_node("worker").bind_node("worker", std::make_shared<IdleNode>());
@@ -120,7 +139,9 @@ TEST(Graphviz, BoundSubgraphSnapshotMatchesBindingAndRebindingClearsIt)
     EXPECT_EQ(outer.to_dot().find("cluster_"), std::string::npos);
 }
 
-TEST(Graphviz, BuilderRetainsBoundPortMappingsInExport)
+// Verifies bound logical port mappings remain visible in graph export.
+TEST(Graphviz,
+     BuilderRetainsBoundPortMappingsInExport)
 {
     auto outer_input = std::make_shared<takt::Pipe<int>>("dot-outer-in");
     auto outer_output = std::make_shared<takt::Pipe<int>>("dot-outer-out");
@@ -128,17 +149,21 @@ TEST(Graphviz, BuilderRetainsBoundPortMappingsInExport)
     auto inner_output = std::make_shared<takt::Pipe<int>>("dot-inner-out");
     auto inner = takt::PipelineBuilder::declare("dot-mapped-inner");
     inner.add_node("worker")
-        .add_input_port("worker", "input",
-                        {{"pipe_endpoint", takt::make_pipe_endpoint(inner_input)}})
-        .add_output_port("worker", "output",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint(inner_output)}})
+        .add_input_port(
+            "worker", "input",
+            {{"pipe_endpoint", takt::make_pipe_endpoint(inner_input)}})
+        .add_output_port(
+            "worker", "output",
+            {{"pipe_endpoint", takt::make_pipe_endpoint(inner_output)}})
         .bind_node("worker", std::make_shared<IdleNode>());
     auto outer = takt::PipelineBuilder::declare("dot-mapped-outer");
     outer.add_node("filter")
-        .add_input_port("filter", "raw",
-                        {{"pipe_endpoint", takt::make_pipe_endpoint(outer_input)}})
-        .add_output_port("filter", "result",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint(outer_output)}})
+        .add_input_port(
+            "filter", "raw",
+            {{"pipe_endpoint", takt::make_pipe_endpoint(outer_input)}})
+        .add_output_port(
+            "filter", "result",
+            {{"pipe_endpoint", takt::make_pipe_endpoint(outer_output)}})
         .bind_subgraph("filter", inner, {{"raw", {"worker", "input"}}},
                        {{"result", {"worker", "output"}}});
     const auto dot = outer.to_dot();
@@ -152,25 +177,36 @@ TEST(Graphviz, BuilderRetainsBoundPortMappingsInExport)
 
 namespace
 {
+// Builds a nested topology with independently selectable boundary transports.
 takt::PipelineGraph mapped_graph(takt::MappingTransport input,
-                                takt::MappingTransport output)
+                                 takt::MappingTransport output)
 {
     takt::PipelineGraph inner;
     inner.name = "inner";
-    inner.nodes = {{"worker", {}, {{"in", takt::PortDirection::Input, {}}},
-                   {{"out", takt::PortDirection::Output, {}}}}};
+    inner.nodes = {{"worker",
+                    {},
+                    {{"in", takt::PortDirection::Input, {}}},
+                    {{"out", takt::PortDirection::Output, {}}}}};
     inner.input_mappings = {{"in", {"worker", "in"}}};
     inner.output_mappings = {{"out", {"worker", "out"}}};
-    inner.input_transports = {{"in", {input, "input", input == takt::MappingTransport::Direct
-                                                       ? "input" : "inner-input"}}};
-    inner.output_transports = {{"out", {output, output == takt::MappingTransport::Direct
-                                                    ? "output" : "inner-output", "output"}}};
+    inner.input_transports = {
+        {"in",
+         {input, "input",
+          input == takt::MappingTransport::Direct ? "input" : "inner-input"}}};
+    inner.output_transports = {
+        {"out",
+         {output,
+          output == takt::MappingTransport::Direct ? "output" : "inner-output",
+          "output"}}};
     takt::PipelineGraph graph;
     graph.name = "mapped";
-    graph.nodes = {{"source", {}, {}, {{"out", takt::PortDirection::Output, {}}}},
-                   {"group", {}, {{"in", takt::PortDirection::Input, {}}},
-                    {{"out", takt::PortDirection::Output, {}}}},
-                   {"sink", {}, {{"in", takt::PortDirection::Input, {}}}, {}}};
+    graph.nodes = {
+        {"source", {}, {}, {{"out", takt::PortDirection::Output, {}}}},
+        {"group",
+         {},
+         {{"in", takt::PortDirection::Input, {}}},
+         {{"out", takt::PortDirection::Output, {}}}},
+        {"sink", {}, {{"in", takt::PortDirection::Input, {}}}, {}}};
     graph.edges = {{"input", "source", "out", "group", "in", {}},
                    {"output", "group", "out", "sink", "in", {}}};
     graph.subgraphs = {{"group", inner}};
@@ -178,7 +214,9 @@ takt::PipelineGraph mapped_graph(takt::MappingTransport input,
 }
 } // namespace
 
-TEST(Graphviz, DirectConnectionsCrossClusterWithoutArtificialWorkers)
+// Verifies direct connections cross nested clusters without invented workers.
+TEST(Graphviz,
+     DirectConnectionsCrossClusterWithoutArtificialWorkers)
 {
     const auto graph = mapped_graph(takt::MappingTransport::Direct,
                                     takt::MappingTransport::Direct);
@@ -189,16 +227,21 @@ TEST(Graphviz, DirectConnectionsCrossClusterWithoutArtificialWorkers)
     EXPECT_NE(dot.find("direct/shared Pipe: input"), std::string::npos);
     EXPECT_EQ(dot.find("_bridge"), std::string::npos);
     EXPECT_EQ(dot.find("shape=ellipse"), std::string::npos);
-    const auto interfaces = takt::to_dot(graph, {true, true, takt::DotView::Interfaces});
+    const auto interfaces =
+        takt::to_dot(graph, {true, true, takt::DotView::Interfaces});
     EXPECT_NE(interfaces.find("g_n0 -> g_n1_in0"), std::string::npos);
     EXPECT_NE(interfaces.find("g_n1_in0 -> g_n1_n0"), std::string::npos);
     EXPECT_NE(interfaces.find("direct/shared Pipe: input"), std::string::npos);
-    EXPECT_NE(takt::to_dot(graph, {false, true}).find("direct=2 bridge=0 unresolved=0"),
+    EXPECT_NE(takt::to_dot(graph, {false, true})
+                  .find("direct=2 bridge=0 unresolved=0"),
               std::string::npos);
-    EXPECT_NE(takt::to_dot(graph, {true, false}).find("rankdir=TB"), std::string::npos);
+    EXPECT_NE(takt::to_dot(graph, {true, false}).find("rankdir=TB"),
+              std::string::npos);
 }
 
-TEST(Graphviz, MixedMappingsShowExactlyOneBridgeAndUnresolvedNeverClaimsWorker)
+// Verifies only bound bridges claim workers and unresolved maps stay explicit.
+TEST(Graphviz,
+     MixedMappingsShowExactlyOneBridgeAndUnresolvedNeverClaimsWorker)
 {
     auto graph = mapped_graph(takt::MappingTransport::Direct,
                               takt::MappingTransport::Bridge);
@@ -210,8 +253,10 @@ TEST(Graphviz, MixedMappingsShowExactlyOneBridgeAndUnresolvedNeverClaimsWorker)
     const auto worker = dot.find("dedicated worker");
     ASSERT_NE(worker, std::string::npos);
     EXPECT_EQ(dot.find("dedicated worker", worker + 1), std::string::npos);
-    const auto interfaces = takt::to_dot(graph, {true, true, takt::DotView::Interfaces});
-    EXPECT_NE(interfaces.find("g_n1_out0_bridge -> g_n1_out0"), std::string::npos);
+    const auto interfaces =
+        takt::to_dot(graph, {true, true, takt::DotView::Interfaces});
+    EXPECT_NE(interfaces.find("g_n1_out0_bridge -> g_n1_out0"),
+              std::string::npos);
     graph.subgraphs.at("group").input_transports.clear();
     graph.subgraphs.at("group").output_transports.clear();
     const auto unresolved = takt::to_dot(graph);
@@ -221,7 +266,9 @@ TEST(Graphviz, MixedMappingsShowExactlyOneBridgeAndUnresolvedNeverClaimsWorker)
     EXPECT_EQ(unresolved.find("direct/shared"), std::string::npos);
 }
 
-TEST(Graphviz, NestedDirectResolvesLeafAndPreservesUnconnectedPorts)
+// Verifies nested direct resolution reaches leaves and retains unused ports.
+TEST(Graphviz,
+     NestedDirectResolvesLeafAndPreservesUnconnectedPorts)
 {
     auto graph = mapped_graph(takt::MappingTransport::Direct,
                               takt::MappingTransport::Direct);
@@ -240,14 +287,18 @@ TEST(Graphviz, NestedDirectResolvesLeafAndPreservesUnconnectedPorts)
     EXPECT_EQ(unconnected, takt::to_dot(graph));
 }
 
-TEST(Graphviz, TransportMetadataIsCheckedAndPipeNamesAreEscaped)
+// Verifies inconsistent transport is rejected and pipe labels are DOT-escaped.
+TEST(Graphviz,
+     TransportMetadataIsCheckedAndPipeNamesAreEscaped)
 {
     auto graph = mapped_graph(takt::MappingTransport::Direct,
                               takt::MappingTransport::Bridge);
     auto& inner = graph.subgraphs.at("group");
     inner.input_transports["in"] = {takt::MappingTransport::Direct,
-                                   "quoted \"pipe\"\nline", "quoted \"pipe\"\nline"};
-    EXPECT_NE(takt::to_dot(graph).find("quoted \\\"pipe\\\"\\nline"), std::string::npos);
+                                    "quoted \"pipe\"\nline",
+                                    "quoted \"pipe\"\nline"};
+    EXPECT_NE(takt::to_dot(graph).find("quoted \\\"pipe\\\"\\nline"),
+              std::string::npos);
     inner.input_transports.emplace("missing", takt::MappingTransportInfo{});
     EXPECT_THROW(takt::to_dot(graph), std::invalid_argument);
     inner.input_transports.erase("missing");
@@ -255,18 +306,21 @@ TEST(Graphviz, TransportMetadataIsCheckedAndPipeNamesAreEscaped)
     EXPECT_THROW(takt::to_dot(graph), std::invalid_argument);
     inner.input_transports["in"].mode = static_cast<takt::MappingTransport>(99);
     EXPECT_THROW(takt::to_dot(graph), std::invalid_argument);
-    EXPECT_THROW(takt::to_dot(graph, {true, true, static_cast<takt::DotView>(99)}),
-                 std::invalid_argument);
+    EXPECT_THROW(
+        takt::to_dot(graph, {true, true, static_cast<takt::DotView>(99)}),
+        std::invalid_argument);
 }
 
-TEST(Graphviz, NestedDirectStopsAtBridgeAndMappedAliasesRemainDistinct)
+// Verifies nested endpoint resolution stops at real bridges and keeps aliases.
+TEST(Graphviz,
+     NestedDirectStopsAtBridgeAndMappedAliasesRemainDistinct)
 {
     auto graph = mapped_graph(takt::MappingTransport::Direct,
                               takt::MappingTransport::Direct);
     auto& inner = graph.subgraphs.at("group");
     auto leaf = inner;
-    leaf.input_transports["in"] =
-        {takt::MappingTransport::Bridge, "input", "inner-input"};
+    leaf.input_transports["in"] = {takt::MappingTransport::Bridge, "input",
+                                   "inner-input"};
     inner.subgraphs.emplace("worker", leaf);
     const auto dot = takt::to_dot(graph);
     EXPECT_NE(dot.find("g_n0 -> g_n1_n0_in0_bridge"), std::string::npos);
@@ -279,8 +333,8 @@ TEST(Graphviz, NestedDirectStopsAtBridgeAndMappedAliasesRemainDistinct)
     group.input_ports.push_back({"alias", takt::PortDirection::Input, {}});
     auto& mapped = aliases.subgraphs.at("group");
     mapped.input_mappings["alias"] = {"worker", "in"};
-    mapped.input_transports["alias"] =
-        {takt::MappingTransport::Bridge, "other-input", "inner-input"};
+    mapped.input_transports["alias"] = {takt::MappingTransport::Bridge,
+                                        "other-input", "inner-input"};
     const auto alias_dot = takt::to_dot(aliases);
     EXPECT_NE(alias_dot.find("g_n1_in0_bridge -> g_n1_n0"), std::string::npos);
     EXPECT_NE(alias_dot.find("g_n1_in1_bridge -> g_n1_n0"), std::string::npos);

@@ -1,5 +1,6 @@
-#include "takt/takt.h"
+// Verifies builder topology validation and nested boundary execution.
 #include "pipe_test_support.h"
+#include "takt/takt.h"
 
 #include <atomic>
 #include <memory>
@@ -16,8 +17,10 @@ namespace
 class ProbeNode final : public takt::Node
 {
   public:
+    // Binds the counter used to verify actual node execution.
     explicit ProbeNode(std::atomic<int>& run_count)
-        : takt::Node("probe"), run_count_(run_count)
+        : takt::Node("probe"),
+          run_count_(run_count)
     {
     }
 
@@ -26,6 +29,7 @@ class ProbeNode final : public takt::Node
     {
     };
 
+    // Admits one persistent processing task per configured worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -35,7 +39,9 @@ class ProbeNode final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Records execution of the bound probe node.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         run_count_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -47,9 +53,12 @@ class ProbeNode final : public takt::Node
 class DoubleNode final : public takt::Node
 {
   public:
+    // Binds pipes to the nested frame-doubling worker.
     DoubleNode(std::shared_ptr<takt::Pipe<int>> in,
                std::shared_ptr<takt::Pipe<int>> out)
-        : takt::Node("double-node"), in_(std::move(in)), out_(std::move(out))
+        : takt::Node("double-node"),
+          in_(std::move(in)),
+          out_(std::move(out))
     {
     }
 
@@ -58,6 +67,7 @@ class DoubleNode final : public takt::Node
     {
     };
 
+    // Admits one persistent processing task per configured worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -67,7 +77,9 @@ class DoubleNode final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Doubles incoming frames until normal completion closes output.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         while (true)
         {
@@ -75,7 +87,7 @@ class DoubleNode final : public takt::Node
             {
                 auto r = in_->acquire_read();
                 auto w = r.is_shot_end() ? out_->acquire_shot_end_write(1)
-                                            : out_->acquire_write();
+                                         : out_->acquire_write();
                 w.value() = r.value() * 2;
                 w.publish();
             }
@@ -95,8 +107,10 @@ class DoubleNode final : public takt::Node
 class DrainStringNode final : public takt::Node
 {
   public:
+    // Binds a string input used to test incompatible bridge payloads.
     explicit DrainStringNode(std::shared_ptr<takt::Pipe<std::string>> in)
-        : takt::Node("drain-string-node"), in_(std::move(in))
+        : takt::Node("drain-string-node"),
+          in_(std::move(in))
     {
     }
 
@@ -105,6 +119,7 @@ class DrainStringNode final : public takt::Node
     {
     };
 
+    // Admits one persistent processing task per configured worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -114,7 +129,9 @@ class DrainStringNode final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Drains string input until its pipe signals normal completion.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         while (true)
         {
@@ -137,25 +154,38 @@ class DrainStringNode final : public takt::Node
 class CapturingLogger final : public takt::ILogger
 {
   public:
+    // Discards undecorated narrow output during failure assertions.
     void display(const std::string&) override {}
+    // Discards undecorated wide output during failure assertions.
     void display(const std::wstring&) override {}
+    // Discards narrow informational output.
     void info(const std::string&) override {}
+    // Discards wide informational output.
     void info(const std::wstring&) override {}
+    // Discards narrow warning output.
     void warn(const std::string&) override {}
+    // Discards wide warning output.
     void warn(const std::wstring&) override {}
+    // Stores narrow errors under synchronization for later assertions.
     void error(const std::string& message) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         error_messages_.push_back(message);
     }
+    // Discards wide errors unused by the structured failure logger.
     void error(const std::wstring&) override {}
+    // Discards narrow debug output.
     void debug(const std::string&) override {}
+    // Discards wide debug output.
     void debug(const std::wstring&) override {}
+    // Keeps debug disabled for deterministic failure assertions.
     bool debug_enabled() const override
     {
         return false;
     }
 
+    // Searches captured error messages while holding their synchronization
+    // lock.
     bool has_error_substring(const std::string& needle) const
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -177,6 +207,8 @@ class CapturingLogger final : public takt::ILogger
 class ScopedLoggerReset final
 {
   public:
+    // Restores default logging even when a test exits through a failed
+    // assertion.
     ~ScopedLoggerReset()
     {
         takt::reset_logger();
@@ -184,7 +216,84 @@ class ScopedLoggerReset final
 };
 } // namespace
 
-TEST(PipelineBuilderTests, SupportsMultipleInputsAndOutputs)
+// Verifies malformed declarations and connections fail without mutating state.
+TEST(PipelineBuilderTests,
+     InvalidDeclarationsAndConnectionsAreRejected)
+{
+    auto graph = takt::PipelineBuilder::create("invalid-inputs");
+    EXPECT_THROW(graph.add_node(""), std::invalid_argument);
+    EXPECT_THROW(graph.add_input_port("", "in"), std::invalid_argument);
+    EXPECT_THROW(graph.add_input_port("source", ""), std::invalid_argument);
+    EXPECT_THROW(graph.add_output_port("", "out"), std::invalid_argument);
+    EXPECT_THROW(graph.add_output_port("source", ""), std::invalid_argument);
+    EXPECT_TRUE(graph.nodes().empty());
+    graph.add_node("source").add_output_port("source", "out");
+    graph.add_node("sink").add_input_port("sink", "in");
+    EXPECT_THROW(graph.connect("", "out", "sink", "in"), std::invalid_argument);
+    EXPECT_THROW(graph.connect("source", "", "sink", "in"),
+                 std::invalid_argument);
+    EXPECT_THROW(graph.connect("source", "out", "", "in"),
+                 std::invalid_argument);
+    EXPECT_THROW(graph.connect("source", "out", "sink", ""),
+                 std::invalid_argument);
+    EXPECT_THROW(graph.connect("missing", "out", "sink", "in"),
+                 std::logic_error);
+    EXPECT_THROW(graph.connect("source", "out", "missing", "in"),
+                 std::logic_error);
+    EXPECT_THROW(graph.connect("source", "missing", "sink", "in"),
+                 std::logic_error);
+    EXPECT_THROW(graph.connect("source", "out", "sink", "missing"),
+                 std::logic_error);
+    EXPECT_TRUE(graph.edges().empty());
+    std::atomic<int> runs{0};
+    auto probe = std::make_shared<ProbeNode>(runs);
+    EXPECT_THROW(graph.bind_node("", probe), std::invalid_argument);
+    EXPECT_THROW(graph.bind_node("source", nullptr), std::invalid_argument);
+    EXPECT_THROW(graph.bind_node("missing", probe), std::logic_error);
+    EXPECT_THROW((void)graph.build_runtime(), std::logic_error);
+    EXPECT_FALSE(graph.has_bound_node("source"));
+    EXPECT_FALSE(graph.has_node("missing"));
+}
+
+// Verifies metadata merging, missing lookups and shared builder-handle state.
+TEST(PipelineBuilderTests,
+     MetadataAndLookupContracts)
+{
+    auto graph = takt::PipelineBuilder::create("metadata");
+    graph.add_node("source", {{"first", 1}});
+    graph.add_node("source", {{"second", 2}});
+    graph.add_output_port("source", "out", {{"first", 1}});
+    graph.add_output_port("source", "out", {{"second", 2}});
+    graph.add_input_port("sink", "in");
+    graph.connect("source", "out", "sink", "in", {}, "frames");
+    const auto* source = graph.find_node("source");
+    ASSERT_NE(source, nullptr);
+    EXPECT_EQ(source->descriptor.size(), 2U);
+    ASSERT_EQ(source->output_ports.size(), 1U);
+    EXPECT_EQ(source->output_ports[0].descriptor.size(), 2U);
+    EXPECT_EQ(graph.find_node("absent"), nullptr);
+    EXPECT_EQ(graph.find_edge("absent"), nullptr);
+    ASSERT_NE(graph.find_edge("frames"), nullptr);
+    EXPECT_EQ(graph.find_edge("frames")->to_node, "sink");
+    EXPECT_EQ(graph.find_bound_node("absent"), nullptr);
+    std::atomic<int> runs{0};
+    auto probe = std::make_shared<ProbeNode>(runs);
+    graph.bind_node("source", probe);
+    EXPECT_EQ(graph.find_bound_node("source"), probe);
+    auto copied = graph;
+    copied.add_node("shared");
+    EXPECT_TRUE(graph.has_node("shared"));
+    auto assigned = takt::PipelineBuilder::create("replaced");
+    assigned = graph;
+    auto moved = std::move(copied);
+    assigned = std::move(moved);
+    EXPECT_EQ(assigned.name(), "metadata");
+    EXPECT_EQ(assigned.nodes().size(), 3U);
+}
+
+// Verifies nodes can declare multiple independent input and output ports.
+TEST(PipelineBuilderTests,
+     SupportsMultipleInputsAndOutputs)
 {
     auto builder = takt::PipelineBuilder::declare("graph-multi");
     builder.add_node("source");
@@ -209,7 +318,9 @@ TEST(PipelineBuilderTests, SupportsMultipleInputsAndOutputs)
     EXPECT_NO_THROW(builder.validate());
 }
 
-TEST(PipelineBuilderTests, AllowsCyclesInGraphModel)
+// Verifies descriptive topology can represent cyclic connections.
+TEST(PipelineBuilderTests,
+     AllowsCyclesInGraphModel)
 {
     auto builder = takt::PipelineBuilder::declare("graph-cycle");
     builder.add_node("a");
@@ -226,7 +337,10 @@ TEST(PipelineBuilderTests, AllowsCyclesInGraphModel)
     EXPECT_NO_THROW(builder.validate());
 }
 
-TEST(PipelineBuilderTests, AllowsDuplicateSameEndpointEdges)
+// Verifies repeated declarations of identical endpoint connections are
+// accepted.
+TEST(PipelineBuilderTests,
+     AllowsDuplicateSameEndpointEdges)
 {
     auto builder = takt::PipelineBuilder::declare("graph-duplicate-edges");
     builder.add_node("source");
@@ -241,7 +355,9 @@ TEST(PipelineBuilderTests, AllowsDuplicateSameEndpointEdges)
     EXPECT_NO_THROW(builder.validate());
 }
 
-TEST(PipelineBuilderTests, BuildRuntimeInjectsPortMetadataToBoundNodes)
+// Verifies runtime nodes receive connected-port diagnostic context.
+TEST(PipelineBuilderTests,
+     BuildRuntimeInjectsPortMetadataToBoundNodes)
 {
     auto builder = takt::PipelineBuilder::declare("graph-runtime-meta");
     builder.add_node("source");
@@ -275,9 +391,12 @@ TEST(PipelineBuilderTests, BuildRuntimeInjectsPortMetadataToBoundNodes)
     ASSERT_TRUE(transform->output_port_names().empty());
 }
 
-TEST(PipelineBuilderTests, BuildRuntimeInjectsDeclaredPortsWithoutChannels)
+// Verifies unconnected declared ports still appear in node diagnostics.
+TEST(PipelineBuilderTests,
+     BuildRuntimeInjectsDeclaredPortsWithoutChannels)
 {
-    auto builder = takt::PipelineBuilder::declare("graph-runtime-declared-only");
+    auto builder =
+        takt::PipelineBuilder::declare("graph-runtime-declared-only");
     builder.add_node("standalone");
     builder.add_input_port("standalone", "in");
     builder.add_output_port("standalone", "out");
@@ -294,7 +413,9 @@ TEST(PipelineBuilderTests, BuildRuntimeInjectsDeclaredPortsWithoutChannels)
     EXPECT_EQ(node->output_port_names()[0], "out");
 }
 
-TEST(PipelineBuilderTests, RuntimeStartsAndJoinsBoundNodes)
+// Verifies bound runtime nodes actually execute and join.
+TEST(PipelineBuilderTests,
+     RuntimeStartsAndJoinsBoundNodes)
 {
     auto builder = takt::PipelineBuilder::declare("graph-runtime-run");
     builder.add_node("a");
@@ -312,7 +433,9 @@ TEST(PipelineBuilderTests, RuntimeStartsAndJoinsBoundNodes)
     EXPECT_EQ(run_count.load(std::memory_order_relaxed), 2);
 }
 
-TEST(PipelineBuilderTests, BindSubgraphBuildsCompositeNode)
+// Verifies nested topology becomes an executable composite runtime node.
+TEST(PipelineBuilderTests,
+     BindSubgraphBuildsCompositeNode)
 {
     auto inner = takt::PipelineBuilder::declare("graph-inner");
     inner.add_node("inner-a");
@@ -334,7 +457,9 @@ TEST(PipelineBuilderTests, BindSubgraphBuildsCompositeNode)
     EXPECT_EQ(inner_run_count.load(std::memory_order_relaxed), 2);
 }
 
-TEST(PipelineBuilderTests, BindSubgraphWithPortMappingsStoresMappings)
+// Verifies explicit boundary mappings survive subgraph binding.
+TEST(PipelineBuilderTests,
+     BindSubgraphWithPortMappingsStoresMappings)
 {
     auto outer_in = make_configured_pipe("mapped-outer-in", 8, 0);
     auto outer_out = make_configured_pipe("mapped-outer-out", 8, 0);
@@ -344,10 +469,12 @@ TEST(PipelineBuilderTests, BindSubgraphWithPortMappingsStoresMappings)
     auto inner = takt::PipelineBuilder::declare("graph-inner-mapped");
     inner.add_node("entry");
     inner.add_node("exit");
-    inner.add_input_port("entry", "in",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_in)}});
+    inner.add_input_port(
+        "entry", "in",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_in)}});
     inner.add_output_port(
-        "exit", "out", {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
+        "exit", "out",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
 
     std::atomic<int> inner_run_count{0};
     inner.bind_node("entry", std::make_shared<ProbeNode>(inner_run_count));
@@ -355,10 +482,12 @@ TEST(PipelineBuilderTests, BindSubgraphWithPortMappingsStoresMappings)
 
     auto outer = takt::PipelineBuilder::declare("graph-outer-mapped");
     outer.add_node("sg");
-    outer.add_input_port("sg", "raw",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
+    outer.add_input_port(
+        "sg", "raw",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
     outer.add_output_port(
-        "sg", "result", {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_out)}});
+        "sg", "result",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_out)}});
 
     outer.bind_subgraph("sg", inner, {{"raw", {"entry", "in"}}},
                         {{"result", {"exit", "out"}}});
@@ -368,13 +497,18 @@ TEST(PipelineBuilderTests, BindSubgraphWithPortMappingsStoresMappings)
     ASSERT_NE(subgraph_node, nullptr);
     ASSERT_EQ(subgraph_node->input_port_mappings().size(), 1U);
     ASSERT_EQ(subgraph_node->output_port_mappings().size(), 1U);
-    EXPECT_EQ(subgraph_node->input_port_mappings().at("raw").node_name, "entry");
+    EXPECT_EQ(subgraph_node->input_port_mappings().at("raw").node_name,
+              "entry");
     EXPECT_EQ(subgraph_node->input_port_mappings().at("raw").port_name, "in");
-    EXPECT_EQ(subgraph_node->output_port_mappings().at("result").node_name, "exit");
-    EXPECT_EQ(subgraph_node->output_port_mappings().at("result").port_name, "out");
+    EXPECT_EQ(subgraph_node->output_port_mappings().at("result").node_name,
+              "exit");
+    EXPECT_EQ(subgraph_node->output_port_mappings().at("result").port_name,
+              "out");
 }
 
-TEST(PipelineBuilderTests, BindSubgraphRejectsMissingRequiredMapping)
+// Verifies incomplete boundary mappings are rejected before execution.
+TEST(PipelineBuilderTests,
+     BindSubgraphRejectsMissingRequiredMapping)
 {
     auto inner = takt::PipelineBuilder::declare("graph-inner-mapped-fail");
     inner.add_node("entry");
@@ -389,7 +523,9 @@ TEST(PipelineBuilderTests, BindSubgraphRejectsMissingRequiredMapping)
     EXPECT_THROW(outer.bind_subgraph("sg", inner, {}, {}), std::logic_error);
 }
 
-TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
+// Verifies bridge workers transfer frames through nested processing.
+TEST(PipelineBuilderTests,
+     SubgraphMappingBridgesRuntimeDataFlow)
 {
     auto outer_in = make_configured_pipe("outer-in", 16, 0);
     auto outer_out = make_configured_pipe("outer-out", 16, 0);
@@ -398,18 +534,23 @@ TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
 
     auto inner = takt::PipelineBuilder::declare("graph-inner-bridge");
     inner.add_node("worker");
-    inner.add_input_port("worker", "in",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_in)}});
+    inner.add_input_port(
+        "worker", "in",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_in)}});
     inner.add_output_port(
-        "worker", "out", {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
-    inner.bind_node("worker", std::make_shared<DoubleNode>(inner_in, inner_out));
+        "worker", "out",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
+    inner.bind_node("worker",
+                    std::make_shared<DoubleNode>(inner_in, inner_out));
 
     auto outer = takt::PipelineBuilder::declare("graph-outer-bridge");
     outer.add_node("sg");
-    outer.add_input_port("sg", "raw",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
+    outer.add_input_port(
+        "sg", "raw",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
     outer.add_output_port(
-        "sg", "result", {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_out)}});
+        "sg", "result",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_out)}});
 
     outer.bind_subgraph("sg", inner, {{"raw", {"worker", "in"}}},
                         {{"result", {"worker", "out"}}});
@@ -449,7 +590,9 @@ TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
     EXPECT_EQ(result[3], 8);
 }
 
-TEST(PipelineBuilderTests, PipeEndpointWriteReportsTypeMismatch)
+// Verifies type-erased writes reject incompatible payload types.
+TEST(PipelineBuilderTests,
+     PipeEndpointWriteReportsTypeMismatch)
 {
     auto pipe = make_configured_pipe("type-mismatch", 4, 0);
     pipe->initialize();
@@ -472,7 +615,9 @@ TEST(PipelineBuilderTests, PipeEndpointWriteReportsTypeMismatch)
     }
 }
 
-TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
+// Verifies boundary transfer failures propagate to the owning runtime.
+TEST(PipelineBuilderTests,
+     SubgraphBridgeFailurePropagatesToRuntimeJoin)
 {
     ScopedLoggerReset logger_reset;
     auto logger = std::make_shared<CapturingLogger>();
@@ -490,8 +635,9 @@ TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
 
     auto outer = takt::PipelineBuilder::declare("graph-outer-bridge-mismatch");
     outer.add_node("sg");
-    outer.add_input_port("sg", "raw",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
+    outer.add_input_port(
+        "sg", "raw",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
 
     outer.bind_subgraph("sg", inner, {{"raw", {"sink", "in"}}}, {});
 
@@ -509,14 +655,17 @@ TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
     outer_in->close();
 
     EXPECT_THROW(runtime->join(), std::runtime_error);
-    EXPECT_TRUE(logger->has_error_substring("pipeline='graph-outer-bridge-mismatch'"));
+    EXPECT_TRUE(
+        logger->has_error_substring("pipeline='graph-outer-bridge-mismatch'"));
     EXPECT_TRUE(logger->has_error_substring("node='sg'"));
     EXPECT_TRUE(logger->has_error_substring("edge='sg.raw->sink.in'"));
     EXPECT_TRUE(logger->has_error_substring("stop_reason='bridge_exception'"));
     EXPECT_TRUE(logger->has_error_substring("exception_summary='"));
 }
 
-TEST(PipelineBuilderTests, SubgraphLifecycleRequestStopJoinNoDeadlock)
+// Verifies cancellation and joining release blocked subgraph workers.
+TEST(PipelineBuilderTests,
+     SubgraphLifecycleRequestStopJoinNoDeadlock)
 {
     auto outer_in = make_configured_pipe("outer-in-lifecycle", 64, 0);
     auto outer_out = make_configured_pipe("outer-out-lifecycle", 64, 0);
@@ -525,18 +674,23 @@ TEST(PipelineBuilderTests, SubgraphLifecycleRequestStopJoinNoDeadlock)
 
     auto inner = takt::PipelineBuilder::declare("graph-inner-lifecycle");
     inner.add_node("worker");
-    inner.add_input_port("worker", "in",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_in)}});
+    inner.add_input_port(
+        "worker", "in",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_in)}});
     inner.add_output_port(
-        "worker", "out", {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
-    inner.bind_node("worker", std::make_shared<DoubleNode>(inner_in, inner_out));
+        "worker", "out",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(inner_out)}});
+    inner.bind_node("worker",
+                    std::make_shared<DoubleNode>(inner_in, inner_out));
 
     auto outer = takt::PipelineBuilder::declare("graph-outer-lifecycle");
     outer.add_node("sg");
-    outer.add_input_port("sg", "raw",
-                         {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
+    outer.add_input_port(
+        "sg", "raw",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_in)}});
     outer.add_output_port(
-        "sg", "result", {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_out)}});
+        "sg", "result",
+        {{"pipe_endpoint", takt::make_pipe_endpoint<int>(outer_out)}});
 
     outer.bind_subgraph("sg", inner, {{"raw", {"worker", "in"}}},
                         {{"result", {"worker", "out"}}});

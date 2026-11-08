@@ -1,3 +1,4 @@
+// Validates pipeline topology and binds direct or worker-bridged subgraphs.
 #include "takt/pipeline/pipeline_builder.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@ namespace takt
 {
 struct PipelineBuilder::State
 {
+    // Creates empty mutable topology state with its declared name.
     explicit State(std::string builder_name) : name(std::move(builder_name)) {}
 
     std::string name;
@@ -31,13 +33,16 @@ namespace
 class Registry
 {
   public:
+    // Retains the named-state registry for the process lifetime.
     static Registry& instance()
     {
         static Registry* registry = new Registry();
         return *registry;
     }
 
-    std::shared_ptr<PipelineBuilder::State> get_or_create_state(const std::string& name)
+    // Finds or creates shared named state under registry synchronization.
+    std::shared_ptr<PipelineBuilder::State>
+    get_or_create_state(const std::string& name)
     {
         std::lock_guard<std::mutex> lk(mutex_);
         auto it = states_.find(name);
@@ -53,13 +58,16 @@ class Registry
 
   private:
     std::mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<PipelineBuilder::State>> states_;
+    std::unordered_map<std::string, std::shared_ptr<PipelineBuilder::State>>
+        states_;
 };
 
-NodeSpec& ensure_node_locked(std::vector<NodeSpec>& nodes, const std::string& name)
+// Finds a named node or appends an empty declaration while state is locked.
+NodeSpec& ensure_node_locked(std::vector<NodeSpec>& nodes,
+                             const std::string& name)
 {
-    auto it = std::find_if(nodes.begin(), nodes.end(),
-                           [&](const NodeSpec& node) { return node.name == name; });
+    auto it = std::find_if(nodes.begin(), nodes.end(), [&](const NodeSpec& node)
+                           { return node.name == name; });
     if (it == nodes.end())
     {
         NodeSpec spec;
@@ -71,16 +79,20 @@ NodeSpec& ensure_node_locked(std::vector<NodeSpec>& nodes, const std::string& na
     return *it;
 }
 
+// Looks up node metadata without acquiring the already-held state mutex.
 const NodeSpec* find_node_locked(const std::vector<NodeSpec>& nodes,
                                  const std::string& name)
 {
-    auto it = std::find_if(nodes.begin(), nodes.end(),
-                           [&](const NodeSpec& node) { return node.name == name; });
+    auto it = std::find_if(nodes.begin(), nodes.end(), [&](const NodeSpec& node)
+                           { return node.name == name; });
     return it == nodes.end() ? nullptr : &*it;
 }
 
-PortSpec& ensure_port_locked(std::vector<PortSpec>& ports, const std::string& port_name,
-                             PortDirection direction, const PipeDescriptor& descriptor)
+// Creates or augments port metadata while preserving its declared direction.
+PortSpec& ensure_port_locked(std::vector<PortSpec>& ports,
+                             const std::string& port_name,
+                             PortDirection direction,
+                             const PipeDescriptor& descriptor)
 {
     auto it = std::find_if(ports.begin(), ports.end(), [&](const PortSpec& port)
                            { return port.name == port_name; });
@@ -106,6 +118,7 @@ PortSpec& ensure_port_locked(std::vector<PortSpec>& ports, const std::string& po
     return *it;
 }
 
+// Looks up a port in state protected by the caller's lock.
 const PortSpec* find_port_locked(const std::vector<PortSpec>& ports,
                                  const std::string& port_name)
 {
@@ -114,25 +127,34 @@ const PortSpec* find_port_locked(const std::vector<PortSpec>& ports,
     return it == ports.end() ? nullptr : &*it;
 }
 
+// Requires nonnull endpoint metadata before binding executable transport.
 std::shared_ptr<AnyPipeEndpoint>
-require_pipe_endpoint_from_port(const PortSpec& port, const std::string& context)
+require_pipe_endpoint_from_port(const PortSpec& port,
+                                const std::string& context)
 {
-    const auto* endpoint = find_descriptor_value<std::shared_ptr<AnyPipeEndpoint>>(
-        port.descriptor, "pipe_endpoint");
+    const auto* endpoint =
+        find_descriptor_value<std::shared_ptr<AnyPipeEndpoint>>(
+            port.descriptor, "pipe_endpoint");
     if (!endpoint || !*endpoint)
     {
-        throw std::logic_error("missing pipe_endpoint descriptor for " + context +
-                               " port '" + port.name + "'");
+        throw std::logic_error("missing pipe_endpoint descriptor for " +
+                               context + " port '" + port.name + "'");
     }
     return *endpoint;
 }
 
+// Binds mapped endpoints and records their actual direct/bridge transport.
 std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
-    const NodeSpec& outer_node, const std::vector<NodeSpec>& inner_nodes,
-    const std::unordered_map<std::string, NodePortRef>& input_port_mappings,
-    const std::unordered_map<std::string, NodePortRef>& output_port_mappings,
-    std::map<std::string, MappingTransportInfo>& input_transports,
-    std::map<std::string, MappingTransportInfo>& output_transports)
+    const NodeSpec& outer_node,
+    const std::vector<NodeSpec>& inner_nodes,
+    const std::unordered_map<std::string,
+                             NodePortRef>& input_port_mappings,
+    const std::unordered_map<std::string,
+                             NodePortRef>& output_port_mappings,
+    std::map<std::string,
+             MappingTransportInfo>& input_transports,
+    std::map<std::string,
+             MappingTransportInfo>& output_transports)
 {
     std::vector<SubgraphNode::BridgeLink> links;
     links.reserve(input_port_mappings.size() + output_port_mappings.size());
@@ -144,9 +166,9 @@ std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
         const auto* inner_node =
             find_node_locked(inner_nodes, mapping.second.node_name);
         const auto* inner_input =
-            inner_node
-                ? find_port_locked(inner_node->input_ports, mapping.second.port_name)
-                : nullptr;
+            inner_node ? find_port_locked(inner_node->input_ports,
+                                          mapping.second.port_name)
+                       : nullptr;
         if (!outer_input || !inner_input)
         {
             throw std::logic_error("invalid subgraph input bridge mapping");
@@ -158,7 +180,8 @@ std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
             outer_node.name + "." + outer_input->name,
             mapping.second.node_name + "." + mapping.second.port_name});
         input_transports.emplace(
-            mapping.first, classify_mapping(*links.back().source, *links.back().target));
+            mapping.first,
+            classify_mapping(*links.back().source, *links.back().target));
     }
 
     for (const auto& mapping : output_port_mappings)
@@ -168,9 +191,9 @@ std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
         const auto* inner_node =
             find_node_locked(inner_nodes, mapping.second.node_name);
         const auto* inner_output =
-            inner_node
-                ? find_port_locked(inner_node->output_ports, mapping.second.port_name)
-                : nullptr;
+            inner_node ? find_port_locked(inner_node->output_ports,
+                                          mapping.second.port_name)
+                       : nullptr;
         if (!outer_output || !inner_output)
         {
             throw std::logic_error("invalid subgraph output bridge mapping");
@@ -182,33 +205,40 @@ std::vector<SubgraphNode::BridgeLink> build_subgraph_bridge_links_locked(
             mapping.second.node_name + "." + mapping.second.port_name,
             outer_node.name + "." + outer_output->name});
         output_transports.emplace(
-            mapping.first, classify_mapping(*links.back().source, *links.back().target));
+            mapping.first,
+            classify_mapping(*links.back().source, *links.back().target));
     }
 
     return links;
 }
 
+// Rejects channels referencing missing nodes or ports while state is locked.
 void validate_locked(const PipelineBuilder::State& state)
 {
     for (const auto& channel : state.channels)
     {
-        const auto* source_node = find_node_locked(state.nodes, channel.from_node);
-        const auto* target_node = find_node_locked(state.nodes, channel.to_node);
+        const auto* source_node =
+            find_node_locked(state.nodes, channel.from_node);
+        const auto* target_node =
+            find_node_locked(state.nodes, channel.to_node);
         if (!source_node || !target_node)
         {
             throw std::logic_error("channel references an undeclared node");
         }
         if (!find_port_locked(source_node->output_ports, channel.from_port))
         {
-            throw std::logic_error("channel references a missing source output port");
+            throw std::logic_error(
+                "channel references a missing source output port");
         }
         if (!find_port_locked(target_node->input_ports, channel.to_port))
         {
-            throw std::logic_error("channel references a missing target input port");
+            throw std::logic_error(
+                "channel references a missing target input port");
         }
     }
 }
 
+// Collects unique declared and connected input labels for exception context.
 std::vector<std::string>
 collect_input_port_names_locked(const NodeSpec& node_spec,
                                 const std::vector<EdgeSpec>& channels)
@@ -238,6 +268,7 @@ collect_input_port_names_locked(const NodeSpec& node_spec,
     return ports;
 }
 
+// Collects unique declared and connected output labels for exception context.
 std::vector<std::string>
 collect_output_port_names_locked(const NodeSpec& node_spec,
                                  const std::vector<EdgeSpec>& channels)
@@ -267,14 +298,19 @@ collect_output_port_names_locked(const NodeSpec& node_spec,
     return ports;
 }
 
+// Requires complete mappings to existing child ports of the right direction.
 void validate_subgraph_port_mappings_locked(
-    const NodeSpec& outer_node, const std::vector<NodeSpec>& inner_nodes,
-    const std::unordered_map<std::string, NodePortRef>& input_port_mappings,
-    const std::unordered_map<std::string, NodePortRef>& output_port_mappings)
+    const NodeSpec& outer_node,
+    const std::vector<NodeSpec>& inner_nodes,
+    const std::unordered_map<std::string,
+                             NodePortRef>& input_port_mappings,
+    const std::unordered_map<std::string,
+                             NodePortRef>& output_port_mappings)
 {
     for (const auto& outer_port : outer_node.input_ports)
     {
-        if (input_port_mappings.find(outer_port.name) == input_port_mappings.end())
+        if (input_port_mappings.find(outer_port.name) ==
+            input_port_mappings.end())
         {
             throw std::logic_error(
                 "missing subgraph input mapping for outer input port");
@@ -283,7 +319,8 @@ void validate_subgraph_port_mappings_locked(
 
     for (const auto& outer_port : outer_node.output_ports)
     {
-        if (output_port_mappings.find(outer_port.name) == output_port_mappings.end())
+        if (output_port_mappings.find(outer_port.name) ==
+            output_port_mappings.end())
         {
             throw std::logic_error(
                 "missing subgraph output mapping for outer output port");
@@ -307,7 +344,8 @@ void validate_subgraph_port_mappings_locked(
             throw std::logic_error(
                 "subgraph input mapping references unknown inner node");
         }
-        if (!find_port_locked(inner_node->input_ports, mapping.second.port_name))
+        if (!find_port_locked(inner_node->input_ports,
+                              mapping.second.port_name))
         {
             throw std::logic_error(
                 "subgraph input mapping references unknown inner input port");
@@ -331,7 +369,8 @@ void validate_subgraph_port_mappings_locked(
             throw std::logic_error(
                 "subgraph output mapping references unknown inner node");
         }
-        if (!find_port_locked(inner_node->output_ports, mapping.second.port_name))
+        if (!find_port_locked(inner_node->output_ports,
+                              mapping.second.port_name))
         {
             throw std::logic_error(
                 "subgraph output mapping references unknown inner output port");
@@ -362,7 +401,8 @@ PipelineBuilder::PipelineBuilder(std::shared_ptr<State> state)
 PipelineBuilder::PipelineBuilder(const PipelineBuilder&) = default;
 PipelineBuilder& PipelineBuilder::operator=(const PipelineBuilder&) = default;
 PipelineBuilder::PipelineBuilder(PipelineBuilder&&) noexcept = default;
-PipelineBuilder& PipelineBuilder::operator=(PipelineBuilder&&) noexcept = default;
+PipelineBuilder&
+PipelineBuilder::operator=(PipelineBuilder&&) noexcept = default;
 PipelineBuilder::~PipelineBuilder() = default;
 
 const std::string& PipelineBuilder::name() const noexcept
@@ -402,7 +442,8 @@ PipelineBuilder& PipelineBuilder::add_input_port(std::string node_name,
 
     std::lock_guard<std::mutex> lk(state_->mutex);
     auto& node = ensure_node_locked(state_->nodes, node_name);
-    ensure_port_locked(node.input_ports, port_name, PortDirection::Input, descriptor);
+    ensure_port_locked(node.input_ports, port_name, PortDirection::Input,
+                       descriptor);
     return *this;
 }
 
@@ -421,16 +462,20 @@ PipelineBuilder& PipelineBuilder::add_output_port(std::string node_name,
 
     std::lock_guard<std::mutex> lk(state_->mutex);
     auto& node = ensure_node_locked(state_->nodes, node_name);
-    ensure_port_locked(node.output_ports, port_name, PortDirection::Output, descriptor);
+    ensure_port_locked(node.output_ports, port_name, PortDirection::Output,
+                       descriptor);
     return *this;
 }
 
-PipelineBuilder& PipelineBuilder::connect(std::string from_node, std::string from_port,
-                                          std::string to_node, std::string to_port,
+PipelineBuilder& PipelineBuilder::connect(std::string from_node,
+                                          std::string from_port,
+                                          std::string to_node,
+                                          std::string to_port,
                                           PipeDescriptor descriptor,
                                           std::string channel_name)
 {
-    if (from_node.empty() || from_port.empty() || to_node.empty() || to_port.empty())
+    if (from_node.empty() || from_port.empty() || to_node.empty() ||
+        to_port.empty())
     {
         throw std::invalid_argument("connection endpoints cannot be empty");
     }
@@ -440,7 +485,8 @@ PipelineBuilder& PipelineBuilder::connect(std::string from_node, std::string fro
     auto* target_node = find_node_locked(state_->nodes, to_node);
     if (!source_node || !target_node)
     {
-        throw std::logic_error("connection endpoints must reference declared nodes");
+        throw std::logic_error(
+            "connection endpoints must reference declared nodes");
     }
 
     if (!find_port_locked(source_node->output_ports, from_port))
@@ -485,16 +531,20 @@ PipelineBuilder& PipelineBuilder::bind_node(std::string node_name,
     return *this;
 }
 
-PipelineBuilder& PipelineBuilder::bind_subgraph(std::string node_name,
-                                                const PipelineBuilder& subgraph_builder)
+PipelineBuilder&
+PipelineBuilder::bind_subgraph(std::string node_name,
+                               const PipelineBuilder& subgraph_builder)
 {
     return bind_subgraph(std::move(node_name), subgraph_builder, {}, {});
 }
 
 PipelineBuilder& PipelineBuilder::bind_subgraph(
-    std::string node_name, const PipelineBuilder& subgraph_builder,
-    std::unordered_map<std::string, NodePortRef> input_port_mappings,
-    std::unordered_map<std::string, NodePortRef> output_port_mappings)
+    std::string node_name,
+    const PipelineBuilder& subgraph_builder,
+    std::unordered_map<std::string,
+                       NodePortRef> input_port_mappings,
+    std::unordered_map<std::string,
+                       NodePortRef> output_port_mappings)
 {
     if (node_name.empty())
     {
@@ -607,12 +657,15 @@ std::shared_ptr<PipelineRuntime> PipelineBuilder::build_runtime() const
         {
             for (const auto& port : ports)
             {
-                if (port.descriptor.find("pipe_endpoint") == port.descriptor.end())
+                if (port.descriptor.find("pipe_endpoint") ==
+                    port.descriptor.end())
                     continue;
-                const auto endpoint = require_pipe_endpoint_from_port(port, "runtime");
+                const auto endpoint =
+                    require_pipe_endpoint_from_port(port, "runtime");
                 auto pipe = endpoint->lifecycle_pipe();
                 if (!pipe)
-                    throw std::logic_error("runtime endpoint pipe cannot be null");
+                    throw std::logic_error(
+                        "runtime endpoint pipe cannot be null");
                 pipes.push_back(std::move(pipe));
             }
         };
@@ -642,8 +695,8 @@ std::shared_ptr<PipelineRuntime> PipelineBuilder::build_runtime() const
             node->add_output_port_name(port);
         }
 
-        const std::string* stage_name =
-            find_descriptor_value<std::string>(node_spec.descriptor, "stage_name");
+        const std::string* stage_name = find_descriptor_value<std::string>(
+            node_spec.descriptor, "stage_name");
         if (stage_name)
         {
             node->set_stage_name(*stage_name);
@@ -667,8 +720,14 @@ void PipelineBuilder::validate() const
 PipelineGraph PipelineBuilder::graph() const
 {
     std::lock_guard<std::mutex> lk(state_->mutex);
-    return {state_->name, state_->nodes, state_->channels, state_->subgraphs,
-            {}, {}, {}, {}};
+    return {state_->name,
+            state_->nodes,
+            state_->channels,
+            state_->subgraphs,
+            {},
+            {},
+            {},
+            {}};
 }
 
 std::string PipelineBuilder::to_dot(DotOptions options) const

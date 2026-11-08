@@ -1,3 +1,4 @@
+// Implements replaceable console logging and platform-specific wide conversion.
 #include "takt/logging/logger.h"
 
 #include <chrono>
@@ -21,42 +22,51 @@ namespace
 class DefaultLogger final : public ILogger
 {
   public:
+    // Serializes undecorated narrow console messages.
     void display(const std::string& message) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::cout << message << std::endl;
     }
 
+    // Serializes undecorated wide console messages.
     void display(const std::wstring& message) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::wcout << message << std::endl;
     }
 
+    // Emits a timestamped narrow informational message.
     void info(const std::string& message) override
     {
         write("INFO", message);
     }
+    // Converts and emits a wide informational message.
     void info(const std::wstring& message) override
     {
         write("INFO", to_utf8(message));
     }
+    // Emits a timestamped narrow warning.
     void warn(const std::string& message) override
     {
         write("WARN", message);
     }
+    // Converts and emits a wide warning.
     void warn(const std::wstring& message) override
     {
         write("WARN", to_utf8(message));
     }
+    // Emits a timestamped narrow error.
     void error(const std::string& message) override
     {
         write("ERROR", message);
     }
+    // Converts and emits a wide error.
     void error(const std::wstring& message) override
     {
         write("ERROR", to_utf8(message));
     }
+    // Emits a narrow debug message only when debug output is enabled.
     void debug(const std::string& message) override
     {
         if (debug_enabled_)
@@ -65,6 +75,7 @@ class DefaultLogger final : public ILogger
         }
     }
 
+    // Converts and emits a wide message only when debug output is enabled.
     void debug(const std::wstring& message) override
     {
         if (debug_enabled_)
@@ -73,17 +84,20 @@ class DefaultLogger final : public ILogger
         }
     }
 
+    // Returns the default logger's debug-output policy.
     bool debug_enabled() const override
     {
         return debug_enabled_;
     }
 
+    // Updates the default logger's debug-output policy.
     void set_debug(bool enabled)
     {
         debug_enabled_ = enabled;
     }
 
   private:
+    // Formats local wall-clock time for message decoration.
     static std::string now_string()
     {
         const auto now = std::chrono::system_clock::now();
@@ -101,6 +115,7 @@ class DefaultLogger final : public ILogger
         return oss.str();
     }
 
+    // Converts wide messages using the platform's existing conversion policy.
     static std::string to_utf8(const std::wstring& w)
     {
         if (w.empty())
@@ -110,8 +125,8 @@ class DefaultLogger final : public ILogger
 
 #ifdef _WIN32
         const int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
-                                            static_cast<int>(w.size()), nullptr, 0,
-                                            nullptr, nullptr);
+                                            static_cast<int>(w.size()), nullptr,
+                                            0, nullptr, nullptr);
         if (len <= 0)
         {
             return "[wstring-convert-failed]";
@@ -119,8 +134,8 @@ class DefaultLogger final : public ILogger
 
         std::string buffer(static_cast<size_t>(len), '\0');
         const int written = WideCharToMultiByte(
-            CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), buffer.data(), len,
-            nullptr, nullptr);
+            CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), buffer.data(),
+            len, nullptr, nullptr);
         if (written <= 0)
         {
             return "[wstring-convert-failed]";
@@ -143,7 +158,9 @@ class DefaultLogger final : public ILogger
 #endif
     }
 
-    void write(const char* level, const std::string& message)
+    // Serializes decorated output to avoid interleaving console messages.
+    void write(const char* level,
+               const std::string& message)
     {
         std::lock_guard<std::mutex> lk(mu_);
         std::cout << "[" << now_string() << "] " << level << " " << message
@@ -157,6 +174,7 @@ class DefaultLogger final : public ILogger
 std::mutex g_mu;
 std::shared_ptr<ILogger> g_logger = std::make_shared<DefaultLogger>();
 
+// Returns the current default logger if a custom logger has not replaced it.
 DefaultLogger* get_default_logger()
 {
     return dynamic_cast<DefaultLogger*>(g_logger.get());

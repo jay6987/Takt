@@ -1,3 +1,4 @@
+// Synchronizes per-pipe file bindings and type-erased frame serialization.
 #include "takt/recordreplay/recordreplay.h"
 
 #include <algorithm>
@@ -10,6 +11,7 @@ namespace takt::recordreplay::detail
 {
 struct RecordReplayRegistry::PipeChannel
 {
+    // Associates synchronized recording/replay streams with one payload type.
     explicit PipeChannel(std::type_index type_index) : type(type_index) {}
 
     std::type_index type;
@@ -33,8 +35,10 @@ void RecordReplayRegistry::register_codec_impl(std::type_index type,
     codecs_[type] = std::move(codec);
 }
 
-std::uint64_t RecordReplayRegistry::set_record_impl(
-    std::type_index type, const void* pipe_id, const std::string& file_path)
+std::uint64_t
+RecordReplayRegistry::set_record_impl(std::type_index type,
+                                      const void* pipe_id,
+                                      const std::string& file_path)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -65,8 +69,10 @@ std::uint64_t RecordReplayRegistry::set_record_impl(
     return binding_id;
 }
 
-std::uint64_t RecordReplayRegistry::set_replay_impl(
-    std::type_index type, const void* pipe_id, const std::string& file_path)
+std::uint64_t
+RecordReplayRegistry::set_replay_impl(std::type_index type,
+                                      const void* pipe_id,
+                                      const std::string& file_path)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -96,8 +102,9 @@ std::uint64_t RecordReplayRegistry::set_replay_impl(
     return binding_id;
 }
 
-void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* pipe_id,
-                                            std::uint64_t binding_id)
+void RecordReplayRegistry::clear_record_impl(std::type_index type,
+                                             const void* pipe_id,
+                                             std::uint64_t binding_id)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -152,8 +159,9 @@ void RecordReplayRegistry::clear_record_impl(std::type_index type, const void* p
     }
 }
 
-void RecordReplayRegistry::clear_replay_impl(std::type_index type, const void* pipe_id,
-                                            std::uint64_t binding_id)
+void RecordReplayRegistry::clear_replay_impl(std::type_index type,
+                                             const void* pipe_id,
+                                             std::uint64_t binding_id)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -209,8 +217,11 @@ RecordReplayRegistry::find_codec_impl(std::type_index type) const
 }
 
 void RecordReplayRegistry::try_record_slots_impl(
-    std::type_index type, const void* pipe_id, const std::vector<size_t>& slots,
-    const void* frames, size_t frame_size,
+    std::type_index type,
+    const void* pipe_id,
+    const std::vector<size_t>& slots,
+    const void* frames,
+    size_t frame_size,
     const std::function<TypeErasedCodec()>& resolve_codec) noexcept
 {
     try
@@ -236,20 +247,25 @@ void RecordReplayRegistry::try_record_slots_impl(
         const auto* frame_bytes = static_cast<const char*>(frames);
         for (size_t slot : slots)
         {
-            codec.record_one(*channel->record, frame_bytes + (slot * frame_size));
+            codec.record_one(*channel->record,
+                             frame_bytes + (slot * frame_size));
         }
         channel->record->flush();
     }
     catch (...)
     {
-        // Recording should not break production flow when triggered from token cleanup.
+        // Recording should not break production flow when triggered from token
+        // cleanup.
     }
 }
 
-void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* pipe_id,
-                                             const std::vector<size_t>& slots,
-                                             void* frames, size_t frame_size,
-                                             const std::function<TypeErasedCodec()>& resolve_codec)
+void RecordReplayRegistry::replay_slots_impl(
+    std::type_index type,
+    const void* pipe_id,
+    const std::vector<size_t>& slots,
+    void* frames,
+    size_t frame_size,
+    const std::function<TypeErasedCodec()>& resolve_codec)
 {
     std::shared_ptr<PipeChannel> channel;
     {
@@ -294,8 +310,8 @@ RecordReplayRegistry::get_or_create_pipe_channel_locked(const void* pipe_id,
 
     if (it->second->type != type)
     {
-        throw std::logic_error(
-            "pipe id reused with different data type in record/replay registry");
+        throw std::logic_error("pipe id reused with different data type in "
+                               "record/replay registry");
     }
 
     return it->second;

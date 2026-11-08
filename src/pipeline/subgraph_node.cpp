@@ -1,3 +1,4 @@
+// Executes nested runtimes and transfers frames across bridged boundaries.
 #include "takt/pipeline/subgraph_node.h"
 
 #include <exception>
@@ -10,12 +11,15 @@
 
 namespace takt
 {
-SubgraphNode::SubgraphNode(
-    std::string node_name, std::shared_ptr<PipelineRuntime> runtime,
-    std::unordered_map<std::string, NodePortRef> input_port_mappings,
-    std::unordered_map<std::string, NodePortRef> output_port_mappings,
-    std::vector<BridgeLink> bridge_links)
-    : NodeBase(std::move(node_name)), runtime_(std::move(runtime)),
+SubgraphNode::SubgraphNode(std::string node_name,
+                           std::shared_ptr<PipelineRuntime> runtime,
+                           std::unordered_map<std::string,
+                                              NodePortRef> input_port_mappings,
+                           std::unordered_map<std::string,
+                                              NodePortRef> output_port_mappings,
+                           std::vector<BridgeLink> bridge_links)
+    : NodeBase(std::move(node_name)),
+      runtime_(std::move(runtime)),
       input_port_mappings_(std::move(input_port_mappings)),
       output_port_mappings_(std::move(output_port_mappings)),
       mapping_links_(std::move(bridge_links))
@@ -29,7 +33,8 @@ SubgraphNode::SubgraphNode(
     {
         if (!link.source || !link.target)
         {
-            throw std::invalid_argument("subgraph bridge endpoints cannot be null");
+            throw std::invalid_argument(
+                "subgraph bridge endpoints cannot be null");
         }
     }
 
@@ -37,9 +42,10 @@ SubgraphNode::SubgraphNode(
         input_port_mappings_.size() + output_port_mappings_.size();
     if (mapping_links_.size() != expected_mapping_count)
     {
-        throw std::logic_error("subgraph mapping link count mismatch: expected=" +
-                               std::to_string(expected_mapping_count) +
-                               " actual=" + std::to_string(mapping_links_.size()));
+        throw std::logic_error(
+            "subgraph mapping link count mismatch: expected=" +
+            std::to_string(expected_mapping_count) +
+            " actual=" + std::to_string(mapping_links_.size()));
     }
     for (const auto& link : mapping_links_)
     {
@@ -54,7 +60,8 @@ SubgraphNode::SubgraphNode(
     }
 }
 
-std::vector<std::shared_ptr<PipelineRuntime>> SubgraphNode::child_runtimes() const
+std::vector<std::shared_ptr<PipelineRuntime>>
+SubgraphNode::child_runtimes() const
 {
     return {runtime_};
 }
@@ -62,7 +69,8 @@ std::vector<std::shared_ptr<PipelineRuntime>> SubgraphNode::child_runtimes() con
 void SubgraphNode::start()
 {
     if (!runtime_->initialized())
-        throw std::logic_error("subgraph runtime must be initialized before start");
+        throw std::logic_error(
+            "subgraph runtime must be initialized before start");
     bridge_stop_requested_.store(false);
     {
         std::lock_guard<std::mutex> lk(bridge_error_mutex_);
@@ -92,7 +100,8 @@ void SubgraphNode::start()
         }
         catch (const std::exception& cleanup)
         {
-            error(std::string("subgraph startup cleanup failed: ") + cleanup.what());
+            error(std::string("subgraph startup cleanup failed: ") +
+                  cleanup.what());
         }
         catch (...)
         {
@@ -180,13 +189,15 @@ void SubgraphNode::request_stop() noexcept
     }
 }
 
-const std::unordered_map<std::string, NodePortRef>&
+const std::unordered_map<std::string,
+                         NodePortRef>&
 SubgraphNode::input_port_mappings() const noexcept
 {
     return input_port_mappings_;
 }
 
-const std::unordered_map<std::string, NodePortRef>&
+const std::unordered_map<std::string,
+                         NodePortRef>&
 SubgraphNode::output_port_mappings() const noexcept
 {
     return output_port_mappings_;
@@ -209,9 +220,10 @@ void SubgraphNode::run_bridge(size_t index)
         catch (const std::exception& e)
         {
             const std::string message =
-                "pipeline='" + pipeline_name() + "' node='" + name() + "' edge='" +
-                link.source_label + "->" + link.target_label +
-                "' stop_reason='bridge_exception' exception_summary='" + e.what() + "'";
+                "pipeline='" + pipeline_name() + "' node='" + name() +
+                "' edge='" + link.source_label + "->" + link.target_label +
+                "' stop_reason='bridge_exception' exception_summary='" +
+                e.what() + "'";
             {
                 std::lock_guard<std::mutex> lk(bridge_error_mutex_);
                 if (!has_bridge_error_)
@@ -227,11 +239,11 @@ void SubgraphNode::run_bridge(size_t index)
         }
         catch (...)
         {
-            const std::string message = "pipeline='" + pipeline_name() + "' node='" +
-                                        name() + "' edge='" + link.source_label + "->" +
-                                        link.target_label +
-                                        "' stop_reason='bridge_exception' "
-                                        "exception_summary='unknown exception'";
+            const std::string message =
+                "pipeline='" + pipeline_name() + "' node='" + name() +
+                "' edge='" + link.source_label + "->" + link.target_label +
+                "' stop_reason='bridge_exception' "
+                "exception_summary='unknown exception'";
             {
                 std::lock_guard<std::mutex> lk(bridge_error_mutex_);
                 if (!has_bridge_error_)

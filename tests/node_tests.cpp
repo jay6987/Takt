@@ -1,5 +1,6 @@
-#include "takt/takt.h"
+// Tests node worker admission, lifecycle hooks and exception propagation.
 #include "pipe_test_support.h"
+#include "takt/takt.h"
 
 #include <atomic>
 #include <chrono>
@@ -20,8 +21,12 @@ namespace
 class SingleWorkerDoubleAgent final : public takt::Node
 {
   public:
-    SingleWorkerDoubleAgent(takt::Pipe<int>& in, takt::Pipe<int>& out)
-        : takt::Node("single-worker-double"), in_(in), out_(out)
+    // Binds pipes to a single persistent doubling worker.
+    SingleWorkerDoubleAgent(takt::Pipe<int>& in,
+                            takt::Pipe<int>& out)
+        : takt::Node("single-worker-double"),
+          in_(in),
+          out_(out)
     {
     }
 
@@ -30,6 +35,7 @@ class SingleWorkerDoubleAgent final : public takt::Node
     {
     };
 
+    // Admits one persistent task per configured worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -39,15 +45,18 @@ class SingleWorkerDoubleAgent final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Doubles frames until normal input completion closes output.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         while (true)
         {
             try
             {
                 auto input = in_.acquire_read();
-                auto output = input.is_shot_end() ? out_.acquire_shot_end_write(1)
-                                                     : out_.acquire_write();
+                auto output = input.is_shot_end()
+                                  ? out_.acquire_shot_end_write(1)
+                                  : out_.acquire_write();
                 output.value() = input.value() * 2;
                 output.publish();
             }
@@ -67,8 +76,14 @@ class SingleWorkerDoubleAgent final : public takt::Node
 class MultiWorkerSumAgent final : public takt::Node
 {
   public:
-    MultiWorkerSumAgent(takt::Pipe<int>& in, std::atomic<int>& sum, size_t workers)
-        : takt::Node("multi-worker-sum", workers), in_(in), sum_(sum)
+    // Binds shared input and an atomic sum to the configured worker count.
+    MultiWorkerSumAgent(takt::Pipe<int>& in,
+                        std::atomic<int>& sum,
+                        size_t workers)
+        : takt::Node("multi-worker-sum",
+                     workers),
+          in_(in),
+          sum_(sum)
     {
     }
 
@@ -77,6 +92,7 @@ class MultiWorkerSumAgent final : public takt::Node
     {
     };
 
+    // Admits one persistent task for each permanent sum worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -86,7 +102,9 @@ class MultiWorkerSumAgent final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Atomically accumulates input frames until the pipe is drained.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         while (true)
         {
@@ -110,13 +128,16 @@ class MultiWorkerSumAgent final : public takt::Node
 class FaultySingleWorkerAgent final : public takt::Node
 {
   public:
-        FaultySingleWorkerAgent() : takt::Node("faulty-single-worker") {}
+    // Creates a single-worker node with deterministic processing failure.
+    FaultySingleWorkerAgent() : takt::Node("faulty-single-worker") {}
 
+    // Returns failure context captured after worker execution has joined.
     const takt::NodeExceptionContext& captured() const
     {
         return captured_;
     }
 
+    // Reports whether the exception hook captured a worker failure.
     bool has_capture() const
     {
         return has_capture_;
@@ -127,6 +148,7 @@ class FaultySingleWorkerAgent final : public takt::Node
     {
     };
 
+    // Admits one persistent task that will trigger the injected failure.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -136,11 +158,14 @@ class FaultySingleWorkerAgent final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Injects the known single-worker processing exception.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         throw std::runtime_error("boom");
     }
 
+    // Saves exception context and preserves the default structured logger.
     void on_exception(const takt::NodeExceptionContext& context) override
     {
         captured_ = context;
@@ -156,13 +181,20 @@ class FaultySingleWorkerAgent final : public takt::Node
 class FaultyMultiWorkerAgent final : public takt::Node
 {
   public:
-        FaultyMultiWorkerAgent() : takt::Node("faulty-multi-worker", 2) {}
+    // Creates two workers with deterministic processing failures.
+    FaultyMultiWorkerAgent()
+        : takt::Node("faulty-multi-worker",
+                     2)
+    {
+    }
 
+    // Returns captured context after all failing workers have joined.
     const takt::NodeExceptionContext& captured() const
     {
         return captured_;
     }
 
+    // Reports whether any worker's exception hook captured a failure.
     bool has_capture() const
     {
         return has_capture_;
@@ -173,6 +205,7 @@ class FaultyMultiWorkerAgent final : public takt::Node
     {
     };
 
+    // Admits one persistent task for each failing worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -182,11 +215,14 @@ class FaultyMultiWorkerAgent final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Injects the known multiworker processing exception.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         throw std::runtime_error("kaboom");
     }
 
+    // Serializes captured failure context and preserves standard logging.
     void on_exception(const takt::NodeExceptionContext& context) override
     {
         {
@@ -206,25 +242,38 @@ class FaultyMultiWorkerAgent final : public takt::Node
 class CapturingLogger final : public takt::ILogger
 {
   public:
+    // Discards undecorated narrow output during failure assertions.
     void display(const std::string&) override {}
+    // Discards undecorated wide output during failure assertions.
     void display(const std::wstring&) override {}
+    // Discards narrow informational output.
     void info(const std::string&) override {}
+    // Discards wide informational output.
     void info(const std::wstring&) override {}
+    // Discards narrow warning output.
     void warn(const std::string&) override {}
+    // Discards wide warning output.
     void warn(const std::wstring&) override {}
+    // Stores narrow errors under synchronization for later assertions.
     void error(const std::string& message) override
     {
         std::lock_guard<std::mutex> lk(mu_);
         error_messages_.push_back(message);
     }
+    // Discards wide errors unused by the structured failure logger.
     void error(const std::wstring&) override {}
+    // Discards narrow debug output.
     void debug(const std::string&) override {}
+    // Discards wide debug output.
     void debug(const std::wstring&) override {}
+    // Keeps debug disabled for deterministic failure assertions.
     bool debug_enabled() const override
     {
         return false;
     }
 
+    // Searches captured error messages while holding their synchronization
+    // lock.
     bool has_error_substring(const std::string& needle) const
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -246,6 +295,8 @@ class CapturingLogger final : public takt::ILogger
 class ScopedLoggerReset final
 {
   public:
+    // Restores default logging even when a test exits through a failed
+    // assertion.
     ~ScopedLoggerReset()
     {
         takt::reset_logger();
@@ -261,13 +312,16 @@ struct IndexedChar
 class OrderedCharStore
 {
   public:
-    void put(size_t idx, char c)
+    // Stores an indexed character and wakes ordered consumers.
+    void put(size_t idx,
+             char c)
     {
         std::lock_guard<std::mutex> lk(mu_);
         store_[idx] = c;
         cv_.notify_all();
     }
 
+    // Marks ingress completion and wakes consumers waiting for missing indices.
     void mark_done()
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -275,7 +329,9 @@ class OrderedCharStore
         cv_.notify_all();
     }
 
-    bool wait_pop(size_t idx, char& out)
+    // Waits for the requested character or confirmed completion without it.
+    bool wait_pop(size_t idx,
+                  char& out)
     {
         std::unique_lock<std::mutex> lk(mu_);
         cv_.wait(lk, [&] { return done_ || store_.find(idx) != store_.end(); });
@@ -300,8 +356,12 @@ class OrderedCharStore
 class IngressReorderAgent final : public takt::Node
 {
   public:
-    IngressReorderAgent(takt::Pipe<IndexedChar>& in, OrderedCharStore& store)
-        : takt::Node("ingress-reorder"), in_(in), store_(store)
+    // Binds unordered indexed input to the synchronized ordered store.
+    IngressReorderAgent(takt::Pipe<IndexedChar>& in,
+                        OrderedCharStore& store)
+        : takt::Node("ingress-reorder"),
+          in_(in),
+          store_(store)
     {
     }
 
@@ -310,6 +370,7 @@ class IngressReorderAgent final : public takt::Node
     {
     };
 
+    // Admits one persistent task that drains indexed input.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -319,7 +380,9 @@ class IngressReorderAgent final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Stores each indexed character and signals completion after input drains.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         try
         {
@@ -343,8 +406,12 @@ class IngressReorderAgent final : public takt::Node
 class OrderedEmitAgent final : public takt::Node
 {
   public:
-    OrderedEmitAgent(OrderedCharStore& store, takt::Pipe<char>& out)
-        : takt::Node("ordered-emit"), store_(store), out_(out)
+    // Binds the ordered character store to a frame output pipe.
+    OrderedEmitAgent(OrderedCharStore& store,
+                     takt::Pipe<char>& out)
+        : takt::Node("ordered-emit"),
+          store_(store),
+          out_(out)
     {
     }
 
@@ -353,6 +420,7 @@ class OrderedEmitAgent final : public takt::Node
     {
     };
 
+    // Admits one persistent task responsible for ordered output.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -362,7 +430,9 @@ class OrderedEmitAgent final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Publishes consecutive characters and closes output when the store drains.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         size_t expected = 0;
         while (true)
@@ -388,8 +458,10 @@ class OrderedEmitAgent final : public takt::Node
 class CountingNode final : public takt::Node
 {
   public:
+    // Binds an execution counter used to verify nested startup.
     explicit CountingNode(std::atomic<int>& count)
-        : takt::Node("counting-node"), count_(count)
+        : takt::Node("counting-node"),
+          count_(count)
     {
     }
 
@@ -398,6 +470,7 @@ class CountingNode final : public takt::Node
     {
     };
 
+    // Admits one counter-update task per configured worker.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -407,7 +480,9 @@ class CountingNode final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Counts successful execution of a nested worker task.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         count_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -419,10 +494,12 @@ class CountingNode final : public takt::Node
 class StoppableNode final : public takt::Node
 {
   public:
-        StoppableNode(std::promise<void>& started_promise,
-                                    std::atomic<bool>& observed_stop)
-                : takt::Node("stoppable-node"), started_promise_(started_promise),
-                    observed_stop_(observed_stop)
+    // Binds startup and cancellation observation signals for lifecycle tests.
+    StoppableNode(std::promise<void>& started_promise,
+                  std::atomic<bool>& observed_stop)
+        : takt::Node("stoppable-node"),
+          started_promise_(started_promise),
+          observed_stop_(observed_stop)
     {
     }
 
@@ -431,6 +508,7 @@ class StoppableNode final : public takt::Node
     {
     };
 
+    // Admits one persistent task that waits for cooperative cancellation.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
     {
         if (sequence_id >= worker_count())
@@ -440,7 +518,9 @@ class StoppableNode final : public takt::Node
         return std::make_unique<WorkerTask>();
     }
 
-    void process_task(size_t, takt::Node::Task&) override
+    // Signals startup, waits for stop and records observed cancellation.
+    void process_task(size_t,
+                      takt::Node::Task&) override
     {
         started_promise_.set_value();
         while (!stop_requested())
@@ -456,7 +536,9 @@ class StoppableNode final : public takt::Node
 };
 } // namespace
 
-TEST(NodeTests, SingleWorkerNodePipeDriven)
+// Verifies a single processing worker consumes and transforms pipe frames.
+TEST(NodeTests,
+     SingleWorkerNodePipeDriven)
 {
     takt::Pipe<int> serial_in("serial-in");
     takt::Pipe<int> serial_out("serial-out");
@@ -494,7 +576,9 @@ TEST(NodeTests, SingleWorkerNodePipeDriven)
     EXPECT_EQ(serial_result[2], 6);
 }
 
-TEST(NodeTests, MultiWorkerNodePipeDriven)
+// Verifies multiple permanent workers consume every frame exactly once.
+TEST(NodeTests,
+     MultiWorkerNodePipeDriven)
 {
     std::atomic<int> parallel_sum{0};
     takt::Pipe<int> parallel_in("parallel-in");
@@ -513,7 +597,9 @@ TEST(NodeTests, MultiWorkerNodePipeDriven)
     EXPECT_EQ(parallel_sum.load(), 100);
 }
 
-TEST(NodeTests, SingleWorkerExceptionContext)
+// Verifies failures carry the single worker's structured diagnostic context.
+TEST(NodeTests,
+     SingleWorkerExceptionContext)
 {
     FaultySingleWorkerAgent faulty;
     faulty.set_stage_name("fault-stage");
@@ -534,7 +620,9 @@ TEST(NodeTests, SingleWorkerExceptionContext)
     EXPECT_FALSE(ctx.has_worker_index);
 }
 
-TEST(NodeTests, MultiWorkerExceptionContext)
+// Verifies multiworker failure reports identify the failing worker.
+TEST(NodeTests,
+     MultiWorkerExceptionContext)
 {
     FaultyMultiWorkerAgent faulty_parallel;
     faulty_parallel.set_stage_name("parallel-fault-stage");
@@ -556,7 +644,9 @@ TEST(NodeTests, MultiWorkerExceptionContext)
     EXPECT_LT(pctx.worker_index, 2U);
 }
 
-TEST(NodeTests, FailureLogsIncludeObservabilityContext)
+// Verifies logged failures include pipeline, stage and port labels.
+TEST(NodeTests,
+     FailureLogsIncludeObservabilityContext)
 {
     ScopedLoggerReset logger_reset;
     auto logger = std::make_shared<CapturingLogger>();
@@ -579,7 +669,9 @@ TEST(NodeTests, FailureLogsIncludeObservabilityContext)
     EXPECT_TRUE(logger->has_error_substring("exception_summary='boom'"));
 }
 
-TEST(NodeTests, NodeBaseStoresMultiplePipeNames)
+// Verifies node context retains all declared input and output names.
+TEST(NodeTests,
+     NodeBaseStoresMultiplePipeNames)
 {
     struct ProbeAgent final : takt::Node
     {
@@ -589,7 +681,8 @@ TEST(NodeTests, NodeBaseStoresMultiplePipeNames)
         {
         };
 
-        std::unique_ptr<takt::Node::Task> build_task(uint64_t sequence_id) override
+        std::unique_ptr<takt::Node::Task>
+        build_task(uint64_t sequence_id) override
         {
             if (sequence_id >= worker_count())
             {
@@ -598,7 +691,10 @@ TEST(NodeTests, NodeBaseStoresMultiplePipeNames)
             return std::make_unique<WorkerTask>();
         }
 
-        void process_task(size_t, takt::Node::Task&) override {}
+        void process_task(size_t,
+                          takt::Node::Task&) override
+        {
+        }
     };
 
     ProbeAgent node;
@@ -617,7 +713,9 @@ TEST(NodeTests, NodeBaseStoresMultiplePipeNames)
     EXPECT_EQ(node.output_port_names()[1], "out-2");
 }
 
-TEST(NodeTests, MultiStageNodesReconstructOrderedOutput)
+// Verifies staged concurrent processing reconstructs ordered output frames.
+TEST(NodeTests,
+     MultiStageNodesReconstructOrderedOutput)
 {
     const std::string slogan = "We will rock you!";
     const std::vector<size_t> shuffled_order = {2, 3,  8,  4, 0,  11, 5,  6, 7,
@@ -665,7 +763,9 @@ TEST(NodeTests, MultiStageNodesReconstructOrderedOutput)
     EXPECT_EQ(reconstructed, slogan);
 }
 
-TEST(NodeTests, SubgraphNodeStartsAndJoinsInnerRuntime)
+// Verifies composite node execution starts and joins the nested runtime.
+TEST(NodeTests,
+     SubgraphNodeStartsAndJoinsInnerRuntime)
 {
     std::atomic<int> run_count{0};
     std::vector<std::shared_ptr<takt::NodeBase>> inner_nodes;
@@ -683,7 +783,9 @@ TEST(NodeTests, SubgraphNodeStartsAndJoinsInnerRuntime)
     EXPECT_EQ(run_count.load(std::memory_order_relaxed), 2);
 }
 
-TEST(NodeTests, SubgraphNodeRequestStopPropagatesToInnerRuntime)
+// Verifies composite cancellation reaches nested processing nodes.
+TEST(NodeTests,
+     SubgraphNodeRequestStopPropagatesToInnerRuntime)
 {
     std::promise<void> worker_started_promise;
     auto worker_started = worker_started_promise.get_future();

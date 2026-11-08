@@ -1,3 +1,4 @@
+// Exposes DOT views of bound pipelines without a Graphviz runtime dependency.
 #pragma once
 
 #include <map>
@@ -21,7 +22,8 @@ struct DotOptions
     DotView view = DotView::Connections;
 };
 
-// Value-owned topology only: descriptors and runtime objects are not serialized.
+// Value-owned topology only: descriptors and runtime objects are not
+// serialized.
 struct PipelineGraph
 {
     std::string name;
@@ -35,5 +37,6 @@ struct PipelineGraph
 };
 
 // Also accepts unbound, descriptive graphs; export does not start any workers.
-std::string to_dot(const PipelineGraph& graph, DotOptions options = {});
+std::string to_dot(const PipelineGraph& graph,
+                   DotOptions options = {});
 } // namespace takt

@@ -1,3 +1,4 @@
+// Tests explicit pipe configuration, initialization and cancellation rules.
 #include "takt/takt.h"
 
 #include <gtest/gtest.h>
@@ -15,8 +16,17 @@ struct FrameProbe
     static inline int copies_until_failure = -1;
     int value = 17;
 
-    FrameProbe() { ++live; }
-    FrameProbe(FrameProbe&& other) noexcept : value(other.value) { ++live; }
+    // Counts construction so allocation timing can be observed.
+    FrameProbe()
+    {
+        ++live;
+    }
+    // Moves the probe value while tracking another live instance.
+    FrameProbe(FrameProbe&& other) noexcept : value(other.value)
+    {
+        ++live;
+    }
+    // Counts copies and injects the configured allocation-time failure.
     FrameProbe(const FrameProbe& other) : value(other.value)
     {
         if (copies_until_failure == 0)
@@ -25,12 +35,19 @@ struct FrameProbe
             --copies_until_failure;
         ++live;
     }
+    // Copies the value without changing live-instance accounting.
     FrameProbe& operator=(const FrameProbe&) = default;
-    ~FrameProbe() { --live; }
+    // Decrements the live-instance count on destruction.
+    ~FrameProbe()
+    {
+        --live;
+    }
 };
 } // namespace
 
-TEST(PipeLifecycleTests, StableObjectIdentityAndIndependentSameNames)
+// Verifies pipe identity is stable and equal names do not imply shared storage.
+TEST(PipeLifecycleTests,
+     StableObjectIdentityAndIndependentSameNames)
 {
     static_assert(!std::is_copy_constructible_v<takt::Pipe<int>>);
     static_assert(!std::is_move_constructible_v<takt::Pipe<int>>);
@@ -42,8 +59,8 @@ TEST(PipeLifecycleTests, StableObjectIdentityAndIndependentSameNames)
     {
         pipe->set_producer(
             {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-        pipe->set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                            takt::overlap_frames(0)});
+        pipe->set_consumer({"consumer", takt::concurrency(1),
+                            takt::frames_per_read(1), takt::overlap_frames(0)});
         pipe->initialize();
     }
     EXPECT_EQ(first.get(), identity);
@@ -63,19 +80,23 @@ TEST(PipeLifecycleTests, StableObjectIdentityAndIndependentSameNames)
     EXPECT_FALSE(second->closed());
 }
 
-TEST(PipeLifecycleTests, ConfigurationOrderAndExactCapacityPolicies)
+// Verifies configuration order does not alter inferred capacity policy.
+TEST(PipeLifecycleTests,
+     ConfigurationOrderAndExactCapacityPolicies)
 {
     for (bool consumer_first : {false, true})
     {
         takt::Pipe<int> pipe("capacity");
         if (consumer_first)
             pipe.set_consumer({"consumer", takt::concurrency(3),
-                               takt::frames_per_read(5), takt::overlap_frames(2)});
-        pipe.set_producer({"producer", takt::concurrency(2), takt::frames_per_write(4)},
-                          9);
+                               takt::frames_per_read(5),
+                               takt::overlap_frames(2)});
+        pipe.set_producer(
+            {"producer", takt::concurrency(2), takt::frames_per_write(4)}, 9);
         if (!consumer_first)
             pipe.set_consumer({"consumer", takt::concurrency(3),
-                               takt::frames_per_read(5), takt::overlap_frames(2)});
+                               takt::frames_per_read(5),
+                               takt::overlap_frames(2)});
         EXPECT_EQ(pipe.slot_capacity(), 11U);
         EXPECT_EQ(pipe.producer_config().name, "producer");
         EXPECT_EQ(pipe.consumer_config().overlap_frames, 2U);
@@ -90,14 +111,17 @@ TEST(PipeLifecycleTests, ConfigurationOrderAndExactCapacityPolicies)
     }
 }
 
-TEST(PipeLifecycleTests, CapacityOverflowIsCheckedAndExplicitCapacityBypassesIt)
+// Verifies inferred capacity uses checked arithmetic and honors overrides.
+TEST(PipeLifecycleTests,
+     CapacityOverflowIsCheckedAndExplicitCapacityBypassesIt)
 {
     const auto maximum = std::numeric_limits<size_t>::max();
     takt::Pipe<int> write_overflow("write-overflow");
     write_overflow.set_producer(
         {"producer", takt::concurrency(maximum), takt::frames_per_write(2)}, 0);
-    write_overflow.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    write_overflow.set_consumer({"consumer", takt::concurrency(1),
+                                 takt::frames_per_read(1),
+                                 takt::overlap_frames(0)});
     EXPECT_THROW(write_overflow.slot_capacity(), std::overflow_error);
     EXPECT_THROW(write_overflow.initialize(), std::overflow_error);
     EXPECT_FALSE(write_overflow.initialized());
@@ -108,21 +132,24 @@ TEST(PipeLifecycleTests, CapacityOverflowIsCheckedAndExplicitCapacityBypassesIt)
     read_overflow.set_producer(
         {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     read_overflow.set_consumer({"consumer", takt::concurrency(maximum),
-                                takt::frames_per_read(3), takt::overlap_frames(1)});
+                                takt::frames_per_read(3),
+                                takt::overlap_frames(1)});
     EXPECT_THROW(read_overflow.slot_capacity(), std::overflow_error);
 
     takt::Pipe<int> read_add_overflow("read-add-overflow");
     read_add_overflow.set_producer(
         {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     read_add_overflow.set_consumer({"consumer", takt::concurrency(maximum),
-                                    takt::frames_per_read(2), takt::overlap_frames(1)});
+                                    takt::frames_per_read(2),
+                                    takt::overlap_frames(1)});
     EXPECT_THROW(read_add_overflow.slot_capacity(), std::overflow_error);
 
     takt::Pipe<int> sum_overflow("sum-overflow");
     sum_overflow.set_producer(
         {"producer", takt::concurrency(maximum), takt::frames_per_write(1)}, 0);
-    sum_overflow.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    sum_overflow.set_consumer({"consumer", takt::concurrency(1),
+                               takt::frames_per_read(1),
+                               takt::overlap_frames(0)});
     EXPECT_EQ(sum_overflow.slot_capacity(), maximum);
     sum_overflow.request_max_concurrency();
     EXPECT_THROW(sum_overflow.slot_capacity(), std::overflow_error);
@@ -130,13 +157,16 @@ TEST(PipeLifecycleTests, CapacityOverflowIsCheckedAndExplicitCapacityBypassesIt)
     EXPECT_NO_THROW(sum_overflow.initialize());
 }
 
-TEST(PipeLifecycleTests, ExplicitSlotCapacityCanBeSmallerThanConfiguredFrameCounts)
+// Verifies explicit capacity is respected even below nominal batching demand.
+TEST(PipeLifecycleTests,
+     ExplicitSlotCapacityCanBeSmallerThanConfiguredFrameCounts)
 {
     takt::Pipe<int> pipe("small");
     pipe.set_slot_capacity(1);
-    pipe.set_producer({"producer", takt::concurrency(8), takt::frames_per_write(4)}, 0);
-    pipe.set_consumer(
-        {"consumer", takt::concurrency(8), takt::frames_per_read(4), takt::overlap_frames(0)});
+    pipe.set_producer(
+        {"producer", takt::concurrency(8), takt::frames_per_write(4)}, 0);
+    pipe.set_consumer({"consumer", takt::concurrency(8),
+                       takt::frames_per_read(4), takt::overlap_frames(0)});
     pipe.initialize();
     EXPECT_TRUE(pipe.initialized());
     EXPECT_EQ(pipe.slot_capacity(), 1U);
@@ -151,17 +181,20 @@ TEST(PipeLifecycleTests, ExplicitSlotCapacityCanBeSmallerThanConfiguredFrameCoun
     EXPECT_THROW(pipe.acquire_read(), std::invalid_argument);
 }
 
-TEST(PipeLifecycleTests, InitializationAllocatesFrameSlotsAndHasStrongFailureGuarantee)
+// Verifies allocation occurs at initialization with rollback on copy failure.
+TEST(PipeLifecycleTests,
+     InitializationAllocatesFrameSlotsAndHasStrongFailureGuarantee)
 {
     ASSERT_EQ(FrameProbe::live, 0);
     FrameProbe::copies_until_failure = -1;
     {
         takt::Pipe<FrameProbe> pipe("allocation");
         EXPECT_EQ(FrameProbe::live, 0);
-        pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)},
-                          FrameProbe{});
-        pipe.set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                           takt::overlap_frames(0)});
+        pipe.set_producer(
+            {"producer", takt::concurrency(1), takt::frames_per_write(1)},
+            FrameProbe{});
+        pipe.set_consumer({"consumer", takt::concurrency(1),
+                           takt::frames_per_read(1), takt::overlap_frames(0)});
         pipe.set_slot_capacity(4);
         EXPECT_EQ(FrameProbe::live, 1);
         FrameProbe::copies_until_failure = 2;
@@ -186,7 +219,9 @@ TEST(PipeLifecycleTests, InitializationAllocatesFrameSlotsAndHasStrongFailureGua
     EXPECT_EQ(FrameProbe::live, 0);
 }
 
-TEST(PipeLifecycleTests, MissingConfigurationAndAllUninitializedAcquisitionsFail)
+// Verifies incomplete configuration and premature token acquisition fail.
+TEST(PipeLifecycleTests,
+     MissingConfigurationAndAllUninitializedAcquisitionsFail)
 {
     takt::Pipe<int> pipe("missing");
     EXPECT_EQ(pipe.queued_frame_count(), 0U);
@@ -202,59 +237,73 @@ TEST(PipeLifecycleTests, MissingConfigurationAndAllUninitializedAcquisitionsFail
     EXPECT_THROW(pipe.acquire_write(), std::logic_error);
     EXPECT_THROW(pipe.acquire_shot_end_write(1), std::logic_error);
     EXPECT_THROW(pipe.acquire_read(), std::logic_error);
-    pipe.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    pipe.set_consumer({"consumer", takt::concurrency(1),
+                       takt::frames_per_read(1), takt::overlap_frames(0)});
     EXPECT_THROW(pipe.initialize(), std::logic_error);
-    pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe.set_producer(
+        {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     EXPECT_NO_THROW(pipe.initialize());
 }
 
-TEST(PipeLifecycleTests, InvalidAndDuplicateConfigurationDoNotReplaceAcceptedValues)
+// Verifies rejected settings never overwrite accepted pipe configuration.
+TEST(PipeLifecycleTests,
+     InvalidAndDuplicateConfigurationDoNotReplaceAcceptedValues)
 {
     takt::Pipe<int> pipe("configuration");
     EXPECT_THROW(pipe.set_slot_capacity(0), std::invalid_argument);
-    EXPECT_THROW(pipe.set_producer(
-                     {"producer", takt::concurrency(0), takt::frames_per_write(1)}, 1),
-                 std::invalid_argument);
-    EXPECT_THROW(pipe.set_producer(
-                     {"producer", takt::concurrency(1), takt::frames_per_write(0)}, 1),
-                 std::invalid_argument);
-    EXPECT_THROW(pipe.set_consumer({"consumer", takt::concurrency(0),
-                                    takt::frames_per_read(1), takt::overlap_frames(0)}),
-                 std::invalid_argument);
-    EXPECT_THROW(pipe.set_consumer({"consumer", takt::concurrency(1),
-                                    takt::frames_per_read(0), takt::overlap_frames(0)}),
-                 std::invalid_argument);
-    EXPECT_THROW(pipe.set_consumer({"consumer", takt::concurrency(1),
-                                    takt::frames_per_read(2), takt::overlap_frames(2)}),
-                 std::invalid_argument);
-    pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)}, 7);
-    pipe.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     EXPECT_THROW(
         pipe.set_producer(
-            {"replacement", takt::concurrency(2), takt::frames_per_write(2)}, 99),
-        std::logic_error);
-    EXPECT_THROW(pipe.set_consumer({"replacement", takt::concurrency(2),
-                                    takt::frames_per_read(2), takt::overlap_frames(0)}),
+            {"producer", takt::concurrency(0), takt::frames_per_write(1)}, 1),
+        std::invalid_argument);
+    EXPECT_THROW(
+        pipe.set_producer(
+            {"producer", takt::concurrency(1), takt::frames_per_write(0)}, 1),
+        std::invalid_argument);
+    EXPECT_THROW(
+        pipe.set_consumer({"consumer", takt::concurrency(0),
+                           takt::frames_per_read(1), takt::overlap_frames(0)}),
+        std::invalid_argument);
+    EXPECT_THROW(
+        pipe.set_consumer({"consumer", takt::concurrency(1),
+                           takt::frames_per_read(0), takt::overlap_frames(0)}),
+        std::invalid_argument);
+    EXPECT_THROW(
+        pipe.set_consumer({"consumer", takt::concurrency(1),
+                           takt::frames_per_read(2), takt::overlap_frames(2)}),
+        std::invalid_argument);
+    pipe.set_producer(
+        {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 7);
+    pipe.set_consumer({"consumer", takt::concurrency(1),
+                       takt::frames_per_read(1), takt::overlap_frames(0)});
+    EXPECT_THROW(pipe.set_producer({"replacement", takt::concurrency(2),
+                                    takt::frames_per_write(2)},
+                                   99),
                  std::logic_error);
+    EXPECT_THROW(
+        pipe.set_consumer({"replacement", takt::concurrency(2),
+                           takt::frames_per_read(2), takt::overlap_frames(0)}),
+        std::logic_error);
     EXPECT_EQ(pipe.frame_template(), 7);
     EXPECT_EQ(pipe.producer_config().name, "producer");
     EXPECT_EQ(pipe.consumer_config().name, "consumer");
     pipe.initialize();
     EXPECT_THROW(pipe.initialize(), std::logic_error);
-    EXPECT_THROW(pipe.set_producer(
-                     {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0),
-                 std::logic_error);
-    EXPECT_THROW(pipe.set_consumer({"consumer", takt::concurrency(1),
-                                    takt::frames_per_read(1), takt::overlap_frames(0)}),
-                 std::logic_error);
+    EXPECT_THROW(
+        pipe.set_producer(
+            {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0),
+        std::logic_error);
+    EXPECT_THROW(
+        pipe.set_consumer({"consumer", takt::concurrency(1),
+                           takt::frames_per_read(1), takt::overlap_frames(0)}),
+        std::logic_error);
     EXPECT_THROW(pipe.set_slot_capacity(1), std::logic_error);
     EXPECT_THROW(pipe.request_max_concurrency(), std::logic_error);
     EXPECT_THROW(pipe.set_descriptor({}), std::logic_error);
 }
 
-TEST(PipeLifecycleTests, ConfigurationCancellationDoesNotAllocateOrPermitInitialization)
+// Verifies cancellation freezes configuration without allocating frames.
+TEST(PipeLifecycleTests,
+     ConfigurationCancellationDoesNotAllocateOrPermitInitialization)
 {
     ASSERT_EQ(FrameProbe::live, 0);
     {
@@ -267,11 +316,12 @@ TEST(PipeLifecycleTests, ConfigurationCancellationDoesNotAllocateOrPermitInitial
         EXPECT_EQ(FrameProbe::live, 0);
         EXPECT_THROW(pipe.initialize(), std::logic_error);
         EXPECT_THROW(pipe.set_consumer({"consumer", takt::concurrency(1),
-                                        takt::frames_per_read(1), takt::overlap_frames(0)}),
+                                        takt::frames_per_read(1),
+                                        takt::overlap_frames(0)}),
                      std::logic_error);
-        EXPECT_THROW(pipe.set_producer(
-                         {"producer", takt::concurrency(1), takt::frames_per_write(1)},
-                         FrameProbe{}),
+        EXPECT_THROW(pipe.set_producer({"producer", takt::concurrency(1),
+                                        takt::frames_per_write(1)},
+                                       FrameProbe{}),
                      std::logic_error);
         EXPECT_THROW(pipe.set_slot_capacity(1), std::logic_error);
         EXPECT_THROW(pipe.request_max_concurrency(), std::logic_error);
@@ -290,21 +340,27 @@ TEST(PipeLifecycleTests, ConfigurationCancellationDoesNotAllocateOrPermitInitial
     EXPECT_THROW(failed.initialize(), std::logic_error);
 }
 
-TEST(PipeLifecycleTests, ConfiguredOverlapInitializesWithoutHistoryPolicy)
+// Verifies overlap needs no separate read-history configuration.
+TEST(PipeLifecycleTests,
+     ConfiguredOverlapInitializesWithoutHistoryPolicy)
 {
     takt::Pipe<int> pipe("overlap");
-    pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
-    pipe.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(3), takt::overlap_frames(1)});
+    pipe.set_producer(
+        {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe.set_consumer({"consumer", takt::concurrency(1),
+                       takt::frames_per_read(3), takt::overlap_frames(1)});
     EXPECT_NO_THROW(pipe.initialize());
 }
 
-TEST(PipeLifecycleTests, AcquireReadUsesConfiguredWindowAndResetsOverlapAtShotEnd)
+// Verifies read windows use configured overlap and reset it between shots.
+TEST(PipeLifecycleTests,
+     AcquireReadUsesConfiguredWindowAndResetsOverlapAtShotEnd)
 {
     takt::Pipe<int> pipe("configured-windows");
-    pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(4)}, 0);
-    pipe.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(3), takt::overlap_frames(1)});
+    pipe.set_producer(
+        {"producer", takt::concurrency(1), takt::frames_per_write(4)}, 0);
+    pipe.set_consumer({"consumer", takt::concurrency(1),
+                       takt::frames_per_read(3), takt::overlap_frames(1)});
     pipe.initialize();
     {
         auto write = pipe.acquire_shot_end_write(4);
@@ -351,12 +407,15 @@ TEST(PipeLifecycleTests, AcquireReadUsesConfiguredWindowAndResetsOverlapAtShotEn
     EXPECT_EQ(read.value(1), 7);
 }
 
-TEST(PipeLifecycleTests, AcquireReadUsesConfiguredSizeWithoutOverlap)
+// Verifies nonoverlapping windows consume the configured frame count.
+TEST(PipeLifecycleTests,
+     AcquireReadUsesConfiguredSizeWithoutOverlap)
 {
     takt::Pipe<int> pipe("configured-read");
-    pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(4)}, 0);
-    pipe.set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(2), takt::overlap_frames(0)});
+    pipe.set_producer(
+        {"producer", takt::concurrency(1), takt::frames_per_write(4)}, 0);
+    pipe.set_consumer({"consumer", takt::concurrency(1),
+                       takt::frames_per_read(2), takt::overlap_frames(0)});
     pipe.initialize();
     {
         auto write = pipe.acquire_shot_end_write(4);

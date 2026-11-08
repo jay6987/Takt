@@ -1,6 +1,7 @@
 add_executable(takt_basic_example
     main.cpp
 )
+takt_warnings(takt_basic_example)
 
 target_link_libraries(takt_basic_example
     PRIVATE

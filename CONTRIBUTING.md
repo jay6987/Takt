@@ -28,6 +28,58 @@ Good contributions include:
   - `.clang-tidy`
   - `.editorconfig`
 
+### Required quality gate
+
+Use LLVM 23 (Clang, clang-format, llvm-cov, llvm-profdata and libclang) and
+CMake >=3.25. Set `TAKT_LLVM_ROOT` to a nonstandard LLVM installation.
+
+```sh
+cmake -P scripts/quality.cmake
+git config --local core.hooksPath .githooks
+```
+
+The gate runs independently of Lynx, on the current checkout, and fails rather
+than skipping missing tools, invalid ASTs or missing coverage profiles. CI
+runs the same entrypoint. Require the `quality` and platform build checks in
+branch protection; local hooks alone can be bypassed.
+
+All owned C++ files in `include`, `src`, `tests`, `examples` and `tools` must:
+
+- Keep every physical line at most 80 columns, including comments and literals.
+  Tabs count as four-column stops; UTF-8 bytes are counted conservatively.
+- Start with a substantive English responsibility comment.
+- Attach a substantive description to every function, including constructors,
+  destructors, operators, helpers and deleted/defaulted members. A documented
+  declaration covers its matching out-of-line definition. Lambdas are exempt.
+- Document written GoogleTest cases, not framework-generated members.
+- Put each declaration/definition parameter on its own physical line, even
+  for short signatures. The first may follow the function name. Calls and
+  nested function-pointer signatures are not subject to this extra rule.
+
+The shared libclang checker validates all owned files against production,
+example, compile-control and installed-consumer ASTs. Unreachable sources
+fail the complete audit. Formatting is checked with LLVM 23, never silently
+rewritten by the gate. Reviewers must still assess comment accuracy.
+
+Production line coverage and branch coverage must **both be >=80%**, compared
+using integer counts without rounding. Tests and tools are not production
+coverage. Every production `.cpp` must appear in the report; difficult code
+is not excluded. Takt and Lynx use the same coverage/contract implementations
+and are evaluated separately, so neither can mask the other's low coverage.
+Lynx retains its additional 400-line file and 60-line body limits; this change
+does not impose those unrelated size limits on Takt.
+
+Coverage, ASan+UBSan and TSan run in separate Debug build directories. Coverage
+uses `-O1`, as in Lynx, while sanitizer builds retain normal Debug settings.
+ASan/UBSan/TSan halt on errors; TSan is never combined with ASan. Standalone
+configuration also exposes `TAKT_COVERAGE=ON` and
+`TAKT_SANITIZER=address-undefined` or `thread`; production builds default to
+uninstrumented. Package smoke tests build **and run** the installed consumer.
+
+The pre-commit hook requires all tracked changes staged and no unrelated
+untracked files, then checks whitespace and the full gate. Work and commits
+inside the Takt checkout are independent of the parent Lynx repository.
+
 ## Pull Request Checklist
 
 Before opening a PR, ensure:

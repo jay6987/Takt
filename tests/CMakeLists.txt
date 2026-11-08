@@ -11,6 +11,7 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(takt_smoke_test
+    logging_tests.cpp
     pipe_config_tests.cpp
     pipe_lifecycle_tests.cpp
     runtime_initialization_tests.cpp
@@ -29,6 +30,16 @@ target_link_libraries(takt_smoke_test
 )
 
 gtest_discover_tests(takt_smoke_test)
+takt_warnings(takt_smoke_test)
+
+if(TAKT_BUILD_QUALITY_TOOLS)
+    add_library(takt_compile_controls OBJECT
+        recordreplay_private_api_compile_test.cpp pipe_config_compile_test.cpp)
+    target_link_libraries(takt_compile_controls PRIVATE takt::takt)
+    target_compile_definitions(takt_compile_controls PRIVATE
+        TAKT_TEST_PUBLIC_API_CONTROL TAKT_TEST_CONFIG_CONTROL)
+    takt_warnings(takt_compile_controls)
+endif()
 
 get_directory_property(_takt_compile_options COMPILE_OPTIONS)
 get_directory_property(_takt_link_options LINK_OPTIONS)
