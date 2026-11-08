@@ -13,11 +13,11 @@ The builder never replaces pipes already held by nodes.
 
 Different pipes retain Bridge mappings. Compatible typed endpoints transfer
 using `transfer_to`: the bridge retains
-both tokens and swaps basket storage. For `std::vector<float>`/`double`, this
+both tokens and swaps frame storage. For `std::vector<float>`/`double`, this
 exchanges preallocated buffers without copying image pixels through `std::any`.
-Buffer identity can move between pipes; do not cache a basket's vector data
-pointer beyond its token lifetime. Use equal fixed image shapes on both sides,
-and disable read-history snapshots for non-overlap image streams.
+Buffer identity can move between pipes; do not cache a frame's vector data
+pointer beyond its token lifetime. Use equal fixed image shapes on both sides
+and configure each consumer's `overlap_frames` for its desired read window.
 
 Explicit endpoint `read()`/`write()` still provide the legacy copied packet API.
 Custom endpoint implementations must implement `close_with_error(message)`.

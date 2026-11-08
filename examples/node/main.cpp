@@ -20,7 +20,7 @@ class DoubleNode final : public takt::Node
     struct DoubleTask final : public takt::Node::Task
     {
         int value = 0;
-        bool segment_end = false;
+        bool shot_end = false;
     };
 
     std::unique_ptr<takt::Node::Task> build_task(uint64_t) override
@@ -30,7 +30,7 @@ class DoubleNode final : public takt::Node
             auto r = in_->acquire_read();
             auto task = std::make_unique<DoubleTask>();
             task->value = r.value();
-            task->segment_end = r.is_segment_end();
+            task->shot_end = r.is_shot_end();
             return task;
         }
         catch (const takt::PipeClosedAndEmptySignal&)
@@ -43,7 +43,7 @@ class DoubleNode final : public takt::Node
     void process_task(size_t, takt::Node::Task& task) override
     {
         auto& t = static_cast<DoubleTask&>(task);
-        auto w = t.segment_end ? out_->acquire_shot_end_write(1)
+        auto w = t.shot_end ? out_->acquire_shot_end_write(1)
                                : out_->acquire_write();
         w.value() = t.value * 2;
         w.publish();
@@ -60,13 +60,13 @@ int main()
     auto in = std::make_shared<takt::Pipe<int>>("node-in");
     in->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     in->set_consumer(
-        {"double", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-    in->set_capacity(16);
+        {"double", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    in->set_slot_capacity(16);
     auto out = std::make_shared<takt::Pipe<int>>("node-out");
     out->set_producer({"double", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     out->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-    out->set_capacity(16);
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    out->set_slot_capacity(16);
     in->initialize();
     out->initialize();
 

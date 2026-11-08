@@ -19,8 +19,8 @@ std::shared_ptr<takt::Pipe<int>> pipe(const std::string& name, size_t capacity =
     result->set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)},
                          0);
     result->set_consumer(
-        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-    result->set_capacity(capacity);
+        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    result->set_slot_capacity(capacity);
     return result;
 }
 
@@ -42,7 +42,7 @@ class Relay final : public takt::NodeBase
                 while (true)
                 {
                     auto read = input_->acquire_read();
-                    auto write = read.is_segment_end() ? output_->acquire_shot_end_write(1)
+                    auto write = read.is_shot_end() ? output_->acquire_shot_end_write(1)
                                                        : output_->acquire_write();
                     write.value() = read.value() * 2;
                     write.publish();
@@ -145,7 +145,7 @@ class CountingIntPipe final : public takt::Pipe<int>
     {
         set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
         set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                      takt::overlap(0)});
+                      takt::overlap_frames(0)});
     }
     void initialize() override
     {

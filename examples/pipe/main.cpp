@@ -9,8 +9,8 @@ int main()
     numbers.set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)},
                          0);
     numbers.set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-    numbers.set_capacity(8);
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+    numbers.set_slot_capacity(8);
     numbers.initialize();
 
     for (int i = 1; i <= 5; ++i)

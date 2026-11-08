@@ -55,7 +55,7 @@ void process_task(size_t, takt::Node::Task& task) override {
 6. `join()`
 
 Runtime `start()` requires prior explicit `initialize()` and never allocates
-baskets implicitly. A directly started `SubgraphNode` likewise requires its
+frames implicitly. A directly started `SubgraphNode` likewise requires its
 internal runtime to be initialized before start.
 
 ## Important Design Choice
@@ -70,13 +70,13 @@ backpressure of the graph.
 The copied scalar example above is not the intended image transport pattern.
 An image task should own move-only `Pipe<std::vector<float>>::ReadToken` and
 `WriteToken` members acquired by `build_task`. Move those tokens into the task,
-enqueue the task, and process directly in their baskets. Call `publish()` only
+enqueue the task, and process directly in their frames. Call `publish()` only
 after successful processing; destruction retires the write and releases the
-read basket. Do not copy the input image or release its read token during task
+read token. Do not copy the input image or release its read token during task
 construction. Preallocate each pipe's vector template and each worker's scratch,
 and configure the consumer's window once before initialization. With
-`read_size == 1` and `overlap_size == 0`, `acquire_read()` reads one frame; larger
-windows are returned by the same API as a batch token.
+`frames_per_read == 1` and `overlap_frames == 0`, `acquire_read()` reads one frame; larger
+windows are returned by the same API as a read token.
 
 ## Failure and shutdown
 
@@ -93,7 +93,7 @@ ordinary graph connections. Subgraph nesting does not replace these node duties.
 
 Pipe-owning nodes must close their bound input/output pipes with an explicit
 error from `on_exception`, and close output after ingress finishes. Closing
-output does not cancel previously reserved write baskets. A stop override or
+output does not cancel previously reserved write frames. A stop override or
 external shutdown must close pipes to wake threads blocked in pipe acquisition;
 `Node::request_stop()` only wakes the internal task queue. Derived destructors
 must stop and join before destroying pipe references or worker scratch.

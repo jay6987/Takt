@@ -67,7 +67,7 @@ class FrameNode final : public takt::Node
         try
         {
             auto input = input_.acquire_read();
-            auto output = input.is_segment_end() ? output_.acquire_shot_end_write(1)
+            auto output = input.is_shot_end() ? output_.acquire_shot_end_write(1)
                                                  : output_.acquire_write();
             return std::make_unique<FrameTask>(std::move(input), std::move(output));
         }
@@ -147,7 +147,7 @@ TEST(PipelineContracts, OverlapWindowsReuseRingSlotsWithoutCopyingPayloads)
 
     auto first = pipe.acquire_read();
     auto second = pipe.acquire_read();
-    ASSERT_EQ(second.overlap_size(), 1U);
+    ASSERT_EQ(second.overlap_frames(), 1U);
     EXPECT_EQ(&first.value(1), &second.value(0));
     EXPECT_EQ(CopyProbe::copies, 0);
     pipe.close();
@@ -181,7 +181,7 @@ TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
                                  return read.value();
                              });
     EXPECT_EQ(reader.wait_for(50ms), std::future_status::timeout);
-    EXPECT_THROW(pipe.close(), takt::PipeUnterminatedSegmentError);
+    EXPECT_THROW(pipe.close(), takt::PipeUnterminatedShotError);
     EXPECT_TRUE(pipe.closed());
     EXPECT_EQ(reader.wait_for(50ms), std::future_status::timeout);
     write->value() = 42;
@@ -203,18 +203,18 @@ TEST(PipelineContracts, ClosedUnterminatedShotDrainsPartialWindowWithoutShotEnd)
         write.publish();
     }
 
-    EXPECT_THROW(pipe.close(), takt::PipeUnterminatedSegmentError);
+    EXPECT_THROW(pipe.close(), takt::PipeUnterminatedShotError);
     {
         auto tail = pipe.acquire_read();
-        EXPECT_EQ(tail.size(), 2U);
-        EXPECT_FALSE(tail.is_segment_end());
+        EXPECT_EQ(tail.frame_count(), 2U);
+        EXPECT_FALSE(tail.is_shot_end());
         EXPECT_EQ(tail.value(0), 4);
         EXPECT_EQ(tail.value(1), 5);
     }
     EXPECT_THROW((void)pipe.acquire_read(), takt::PipeClosedAndEmptySignal);
 }
 
-TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveSegments)
+TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveWindows)
 {
     takt::Pipe<int> pipe("retained-reads");
     configure_pipe(pipe, 2, 0);
@@ -293,7 +293,7 @@ TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
         auto read = pipe.acquire_read();
         EXPECT_EQ(read.value(), 1);
     }
-    EXPECT_EQ(pipe.size(), 0U);
+    EXPECT_EQ(pipe.queued_frame_count(), 0U);
     EXPECT_THROW((void)pipe.acquire_read(), takt::PipeFaultedError);
 }
 

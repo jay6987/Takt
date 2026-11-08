@@ -42,7 +42,7 @@ class CountingPipe final : public takt::PipeBase
         set_producer_config(
             {"producer", takt::concurrency(1), takt::frames_per_write(1)});
         set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                      takt::overlap(0)});
+                      takt::overlap_frames(0)});
     }
     bool closed() const noexcept override
     {
@@ -91,7 +91,7 @@ TEST(RuntimeInitialization, StopBeforeInitializationCancelsRegisteredPipes)
     auto pipe = std::make_shared<takt::Pipe<int>>("cancelled");
     pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     pipe->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     auto probe = std::make_shared<Probe>();
     takt::PipelineRuntime runtime({probe}, {pipe});
     runtime.request_stop();
@@ -195,7 +195,7 @@ TEST(RuntimeInitialization, ReadyPipeCanBeAdoptedButTerminalPipeCannot)
     auto pipe = std::make_shared<takt::Pipe<int>>("ready");
     pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     pipe->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     pipe->initialize();
     takt::PipelineRuntime runtime({}, {pipe});
     EXPECT_NO_THROW(runtime.initialize());
@@ -213,8 +213,8 @@ TEST(RuntimeInitialization, StopClosesEveryPipeBeforeReportingUnterminatedShot)
         pipe->set_producer(
             {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
         pipe->set_consumer(
-            {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-        pipe->set_capacity(2);
+            {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+        pipe->set_slot_capacity(2);
         pipe->initialize();
         auto write = pipe->acquire_write();
         write.value() = 7;
@@ -223,7 +223,7 @@ TEST(RuntimeInitialization, StopClosesEveryPipeBeforeReportingUnterminatedShot)
 
     takt::PipelineRuntime runtime({}, {first, second});
     runtime.initialize();
-    EXPECT_THROW(runtime.request_stop(), takt::PipeUnterminatedSegmentError);
+    EXPECT_THROW(runtime.request_stop(), takt::PipeUnterminatedShotError);
     EXPECT_TRUE(first->closed());
     EXPECT_TRUE(second->closed());
     EXPECT_NO_THROW(runtime.join());
@@ -234,7 +234,7 @@ TEST(RuntimeInitialization, EndpointWrappersReferToSamePreparedObject)
     auto pipe = std::make_shared<takt::Pipe<int>>("connection");
     pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     pipe->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     auto graph = takt::PipelineBuilder::create("graph");
     auto source = std::make_shared<Probe>();
     auto sink = std::make_shared<Probe>();
@@ -291,7 +291,7 @@ TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
         pipe->set_producer(
             {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
         pipe->set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
-                            takt::overlap(0)});
+                            takt::overlap_frames(0)});
     }
     auto inner = std::make_shared<takt::PipelineRuntime>(
         std::vector<std::shared_ptr<takt::NodeBase>>{});
@@ -314,8 +314,8 @@ TEST(RuntimeInitialization, ConfiguredOverlapReadsRetainedRingSlots)
     takt::Pipe<int> pipe("overlap");
     pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
     pipe.set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(2), takt::overlap(1)});
-    pipe.set_capacity(3);
+        {"sink", takt::concurrency(1), takt::frames_per_read(2), takt::overlap_frames(1)});
+    pipe.set_slot_capacity(3);
     pipe.initialize();
     {
         auto write = pipe.acquire_shot_end_write(3);
@@ -326,15 +326,15 @@ TEST(RuntimeInitialization, ConfiguredOverlapReadsRetainedRingSlots)
     }
     {
         auto read = pipe.acquire_read();
-        ASSERT_EQ(read.size(), 2U);
-        EXPECT_EQ(read.overlap_size(), 0U);
+        ASSERT_EQ(read.frame_count(), 2U);
+        EXPECT_EQ(read.overlap_frames(), 0U);
         EXPECT_EQ(read.value(0), 1);
         EXPECT_EQ(read.value(1), 2);
     }
     {
         auto read = pipe.acquire_read();
-        ASSERT_EQ(read.size(), 2U);
-        EXPECT_EQ(read.overlap_size(), 1U);
+        ASSERT_EQ(read.frame_count(), 2U);
+        EXPECT_EQ(read.overlap_frames(), 1U);
         EXPECT_EQ(read.value(0), 2);
         EXPECT_EQ(read.value(1), 3);
     }

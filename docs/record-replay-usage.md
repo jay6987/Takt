@@ -1,6 +1,6 @@
 # Record and Replay Guide
 
-`recordreplay` lets a `Pipe<T>` record emitted slots to disk and replay slots back into baskets.
+`recordreplay` lets a `Pipe<T>` record emitted slots to disk and replay slots back into frames.
 
 ## Trivially Copyable Types
 
@@ -10,8 +10,8 @@ For trivially copyable payloads (for example `int`), no codec registration is ne
 takt::Pipe<int> record_pipe("record-int");
 record_pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
 record_pipe.set_consumer(
-    {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(0)});
-record_pipe.set_capacity(8);
+    {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap_frames(0)});
+record_pipe.set_slot_capacity(8);
 record_pipe.initialize();
 auto record = takt::recordreplay::make_scoped_record(record_pipe, file_path);
 
@@ -28,8 +28,8 @@ Replay:
 takt::Pipe<int> replay_pipe("replay-int");
 replay_pipe.set_producer({"seed", takt::concurrency(1), takt::frames_per_write(3)}, 0);
 replay_pipe.set_consumer(
-    {"replay", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(0)});
-replay_pipe.set_capacity(8);
+    {"replay", takt::concurrency(1), takt::frames_per_read(3), takt::overlap_frames(0)});
+replay_pipe.set_slot_capacity(8);
 replay_pipe.initialize();
 auto replay = takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
 
@@ -81,6 +81,6 @@ If you want to see where `Pipe<int>` record/replay behavior is implemented:
 2. Stream/file and registry implementation:
     - `src/recordreplay/recordreplay.cpp`
 3. Where record is triggered in pipe write lifecycle:
-    - `include/takt/pipeline/pipe.h` in `WriteBatchToken::release()`
+    - `include/takt/pipeline/pipe.h` in `WriteReservation::release()`
 4. Where replay is triggered in pipe read lifecycle:
     - `include/takt/pipeline/pipe.h` in `Pipe<T>::acquire_read()`

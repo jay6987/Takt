@@ -8,8 +8,8 @@ This page shows the minimal usage pattern for `Pipe<T>`.
 takt::Pipe<int> numbers("numbers");
 numbers.set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
 numbers.set_consumer(
-    {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-numbers.set_capacity(8);
+    {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+numbers.set_slot_capacity(8);
 numbers.initialize();
 
 for (int i = 1; i <= 5; ++i)
@@ -38,18 +38,18 @@ while (true)
 
 - Construct one pipe per connection and share that same object with both ends.
   Names are diagnostic labels, not registry keys.
-- Configure both ends and the producer's typed basket template before
+- Configure both ends and the producer's typed frame template before
   `initialize()`. Either end may configure first; configuration is coordinated
   serially, not concurrently with initialization or workers.
-- `ProducerConfig` fields are `name`, `concurrency`, `write_size`;
-  `ConsumerConfig` fields are `name`, `concurrency`, `read_size`, `overlap_size`.
+- `ProducerConfig` fields are `name`, `concurrency`, `frames_per_write`;
+  `ConsumerConfig` fields are `name`, `concurrency`, `frames_per_read`, `overlap_frames`.
 - Optional `set_descriptor()` also belongs to configuration. After
   initialization, all configuration is frozen.
 - A standalone pipe must be explicitly initialized before any token acquisition.
 - Always call `publish()` on write tokens that should become visible.
 - Call `close()` when no more data will be written. If the Shot is unfinished,
   `close()` closes and wakes the pipe before throwing
-  `PipeUnterminatedSegmentError`; it does not fabricate a ShotEnd.
+  `PipeUnterminatedShotError`; it does not fabricate a ShotEnd.
 - Consumer loops should exit on `PipeClosedAndEmptySignal`.
 
 ## Named Configuration Arguments
@@ -61,20 +61,21 @@ Configuration constructors require distinct strong types, in this fixed order:
 numbers.set_producer({"source", takt::concurrency(2), takt::frames_per_write(4)}, 0);
 // Consumer: name, concurrency, frames per read, overlap
 numbers.set_consumer(
-    {"sink", takt::concurrency(3), takt::frames_per_read(5), takt::overlap(2)});
+    {"sink", takt::concurrency(3), takt::frames_per_read(5), takt::overlap_frames(2)});
 ```
 
 `concurrency()` returns `Concurrency`, `frames_per_write()` returns
-`FramesPerWrite`, `frames_per_read()` returns `FramesPerRead`, and `overlap()`
-returns `Overlap`. Each wraps a `size_t` without implicit conversions.
+`FramesPerWrite`, `frames_per_read()` returns `FramesPerRead`, and `overlap_frames()`
+returns `OverlapFrames`. Each wraps a `size_t` without implicit conversions.
 Bare integers, swapped argument types, and substituting write frames for read
 frames (or vice versa) fail compilation. This intentionally replaces the old
 positional-integer construction; there is no compatibility overload.
 
 The stored numeric fields are unchanged: the helpers map to `concurrency`,
-`write_size`, `read_size`, and `overlap_size`, respectively. These counts refer
-to pipe slots/baskets, not elements within a basket. Runtime validation still
-requires positive concurrency and frame counts and `overlap < frames_per_read`.
+`frames_per_write`, `frames_per_read`, and `overlap_frames`, respectively. These counts refer
+to pipe slots/frames, not elements within a frame. Runtime validation still
+requires positive concurrency and frame counts and
+`overlap_frames < frames_per_read`.
 In particular, one frame per read requires overlap 0, not 1.
 
 Defaults are unchanged. Default construction or name-only configuration uses
@@ -96,12 +97,12 @@ numbers.set_consumer({"sink", takt::concurrency(3), takt::frames_per_read(5)});
 These are alternatives, not repeated calls: each endpoint can be configured only once.
 Read acquisition always uses the configured consumer window.
 
-## Capacity and Write Size
+## Slot Capacity and Write Size
 
-Without `set_capacity()`, capacity is `max(W, R)`, where
-`W = producer.concurrency * producer.write_size` and
-`R = consumer.concurrency * (consumer.read_size - consumer.overlap_size)
-+ consumer.overlap_size`. `request_max_concurrency()` changes this to `W + R`;
+Without `set_slot_capacity()`, slot capacity is `max(W, R)`, where
+`W = producer.concurrency * producer.frames_per_write` and
+`R = consumer.concurrency * (consumer.frames_per_read - consumer.overlap_frames)
++ consumer.overlap_frames`. `request_max_concurrency()` changes this to `W + R`;
 repeated requests cannot undo a previous request. These calculations reject
 overflow. Concurrency declares capacity demand, not runtime thread permits.
 
@@ -110,47 +111,47 @@ either side's concurrency or configured write/read size. The explicit path does
 not calculate unused concurrency demand. Acquiring more slots than capacity
 throws instead of waiting forever; initialization itself accepts that capacity.
 
-`ProducerConfig::write_size` is both the default token size and maximum explicit
+`ProducerConfig::frames_per_write` is both the default token size and maximum explicit
 token size:
 
 ```cpp
-// Reserves write_size slots and does not end the Shot:
+// Reserves frames_per_write slots and does not end the Shot:
 auto writes = numbers.acquire_write();
-// Reserves 1..write_size slots and explicitly ends the Shot:
+// Reserves 1..frames_per_write slots and explicitly ends the Shot:
 auto final_writes = numbers.acquire_shot_end_write(2);
 ```
 
 Use `acquire_shot_end_write(count)` for a final full or partial token. A
 no-argument write is never a ShotEnd, including when it reserves one slot.
 
-Read acquisition has one entry point and uses `ConsumerConfig::read_size` and
-`overlap_size`:
+Read acquisition has one entry point and uses `ConsumerConfig::frames_per_read` and
+`overlap_frames`:
 
 ```cpp
 auto reads = numbers.acquire_read();
-for (size_t i = 0; i < reads.size(); ++i)
+for (size_t i = 0; i < reads.frame_count(); ++i)
     consume(reads.value(i));
 ```
 
-Each read advances by `read_size - overlap_size`. During an open Shot, a window
+Each read advances by `frames_per_read - overlap_frames`. During an open Shot, a window
 becomes readable as soon as its full stride of newly published slots is
 available; it does not wait for ShotEnd. A committed ShotEnd bounds the window
 and may return a shorter final window. Overlap values are retained in the ring
 buffer; they are not copied into a separate history snapshot. The first window
-in each segment has no overlap, and a segment end resets overlap so the next
-segment never includes frames from the previous segment. Active read tokens pin
+in each Shot has no overlap, and a ShotEnd resets overlap so the next
+Shot never includes frames from the previous Shot. Active read tokens pin
 their slots until destruction, so tokens may be processed concurrently after
 being acquired in order. The configured overlap also determines the capacity
 retained behind the read cursor.
 
 After an unfinished Shot is closed, its published slots remain readable. The
-final partial read window has `is_segment_end() == false`; once drained, readers
+final partial read window has `is_shot_end() == false`; once drained, readers
 receive the usual `PipeClosedAndEmptySignal`.
 
 ## Runtime Preparation
 
 `PipelineBuilder::build_runtime()` collects pipes from bound port endpoints,
-including nested subgraphs. It does not allocate baskets or start threads:
+including nested subgraphs. It does not allocate frames or start threads:
 
 ```cpp
 auto runtime = builder.build_runtime();

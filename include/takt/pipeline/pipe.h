@@ -15,26 +15,26 @@ template <typename T> class Pipe : public PipeBase
 {
   public:
     class WriteToken;
-    class WriteBatchToken;
+    class WriteReservation;
     class ReadToken;
 
     explicit Pipe(std::string name) : PipeBase(std::move(name)) {}
 
-    void set_producer(ProducerConfig config, T basket_template)
+    void set_producer(ProducerConfig config, T frame_template)
     {
         require_configuring();
         if (has_producer())
             fail("producer is already configured");
-        auto storage = std::make_unique<T>(std::move(basket_template));
+        auto storage = std::make_unique<T>(std::move(frame_template));
         set_producer_config(std::move(config));
-        basket_template_ = std::move(storage);
+        frame_template_ = std::move(storage);
     }
 
-    const T& basket_template() const
+    const T& frame_template() const
     {
-        if (!basket_template_)
-            fail("basket template is only available during configuration");
-        return *basket_template_;
+        if (!frame_template_)
+            fail("frame template is only available during configuration");
+        return *frame_template_;
     }
 
     void set_descriptor(PipeDescriptor descriptor)
@@ -46,30 +46,30 @@ template <typename T> class Pipe : public PipeBase
     void validate_configuration() const override
     {
         validate_common();
-        if (!basket_template_)
-            fail("producer basket template is missing");
+        if (!frame_template_)
+            fail("producer frame template is missing");
     }
 
     void initialize() override
     {
         validate_configuration();
-        const auto count = capacity();
+        const auto slot_count = slot_capacity();
         auto core = std::make_unique<PipeCore>(
-            name(), count, consumer_config().overlap_size,
-            producer_config().write_size);
-        std::vector<T> baskets(count, *basket_template_);
+            name(), slot_count, consumer_config().overlap_frames,
+            producer_config().frames_per_write);
+        std::vector<T> frames(slot_count, *frame_template_);
         core_ = std::move(core);
-        baskets_ = std::move(baskets);
-        basket_template_.reset();
+        frames_ = std::move(frames);
+        frame_template_.reset();
         initialized_ = true;
     }
 
     Pipe(const Pipe&) = delete;
     Pipe& operator=(const Pipe&) = delete;
 
-    size_t size() const noexcept
+    size_t queued_frame_count() const noexcept
     {
-        return core_ ? core_->size() : 0;
+        return core_ ? core_->queued_frame_count() : 0;
     }
     bool closed() const noexcept override
     {
@@ -111,13 +111,13 @@ template <typename T> class Pipe : public PipeBase
 
     WriteToken acquire_write()
     {
-        auto token = acquire_write_token(producer_config().write_size, false);
+        auto token = acquire_write_reservation(producer_config().frames_per_write, false);
         return WriteToken(std::move(token));
     }
 
-    WriteToken acquire_shot_end_write(size_t count)
+    WriteToken acquire_shot_end_write(size_t frame_count)
     {
-        auto token = acquire_write_token(count, true);
+        auto token = acquire_write_reservation(frame_count, true);
         return WriteToken(std::move(token));
     }
 
@@ -125,28 +125,28 @@ template <typename T> class Pipe : public PipeBase
     {
         require_initialized();
         const auto& config = consumer_config();
-        auto core_batch =
-            core_->acquire_read_window(config.read_size, config.overlap_size);
+        auto window =
+            core_->acquire_read_window(config.frames_per_read, config.overlap_frames);
 
         try
         {
             recordreplay::detail::RecordReplayRegistry::instance().replay_slots(
-                *this, core_batch.slots, baskets_);
+                *this, window.slots, frames_);
 
             std::vector<size_t> slots;
-            slots.reserve(core_batch.read_size);
-            for (size_t i = 0; i < core_batch.read_size; ++i)
+            slots.reserve(window.frame_count);
+            for (size_t i = 0; i < window.frame_count; ++i)
             {
-                slots.push_back((core_batch.start_pos + i) % capacity());
+                slots.push_back((window.start_frame_index + i) % slot_capacity());
             }
 
-            return ReadToken(this, core_batch.token_id, core_batch.is_segment_start,
-                             core_batch.is_segment_end, std::move(slots),
-                             core_batch.overlap_size, core_batch.read_size);
+            return ReadToken(this, window.token_id, window.is_shot_start,
+                             window.is_shot_end, std::move(slots),
+                             window.overlap_frames, window.frame_count);
         }
         catch (...)
         {
-            core_->release_read_batch(core_batch.token_id);
+            core_->release_read_window(window.token_id);
             throw;
         }
     }
@@ -156,9 +156,15 @@ template <typename T> class Pipe : public PipeBase
       public:
         WriteToken() = default;
 
-        explicit WriteToken(WriteBatchToken&& batch) : batch_(std::move(batch)) {}
+        explicit WriteToken(WriteReservation&& reservation)
+            : reservation_(std::move(reservation))
+        {
+        }
 
-        WriteToken(WriteToken&& rhs) noexcept : batch_(std::move(rhs.batch_)) {}
+        WriteToken(WriteToken&& rhs) noexcept
+            : reservation_(std::move(rhs.reservation_))
+        {
+        }
 
         WriteToken& operator=(WriteToken&& rhs) noexcept
         {
@@ -166,7 +172,7 @@ template <typename T> class Pipe : public PipeBase
             {
                 return *this;
             }
-            batch_ = std::move(rhs.batch_);
+            reservation_ = std::move(rhs.reservation_);
             return *this;
         }
 
@@ -175,74 +181,74 @@ template <typename T> class Pipe : public PipeBase
 
         ~WriteToken() = default;
 
-        size_t size() const noexcept
+        size_t frame_count() const noexcept
         {
-            return batch_.size();
+            return reservation_.frame_count();
         }
 
         T& value()
         {
-            if (size() != 1)
+            if (frame_count() != 1)
             {
                 throw std::logic_error(
-                    "write token contains multiple values; use value(index)");
+                    "write token contains multiple frames; use value(index)");
             }
-            return batch_.value(0);
+            return reservation_.value(0);
         }
         const T& value() const
         {
-            if (size() != 1)
+            if (frame_count() != 1)
             {
                 throw std::logic_error(
-                    "write token contains multiple values; use value(index)");
+                    "write token contains multiple frames; use value(index)");
             }
-            return batch_.value(0);
+            return reservation_.value(0);
         }
         T& value(size_t index)
         {
-            return batch_.value(index);
+            return reservation_.value(index);
         }
         const T& value(size_t index) const
         {
-            return batch_.value(index);
+            return reservation_.value(index);
         }
 
         void publish() noexcept
         {
-            batch_.publish();
+            reservation_.publish();
         }
         bool published() const noexcept
         {
-            return batch_.published();
+            return reservation_.published();
         }
-        bool is_segment_start() const noexcept
+        bool is_shot_start() const noexcept
         {
-            return batch_.is_segment_start();
+            return reservation_.is_shot_start();
         }
-        bool is_segment_end() const noexcept
+        bool is_shot_end() const noexcept
         {
-            return batch_.is_segment_end();
+            return reservation_.is_shot_end();
         }
 
       private:
-        WriteBatchToken batch_;
+        WriteReservation reservation_;
     };
 
-    class WriteBatchToken
+    class WriteReservation
     {
       public:
-        WriteBatchToken() = default;
+        WriteReservation() = default;
 
-        WriteBatchToken(WriteBatchToken&& rhs) noexcept
+        WriteReservation(WriteReservation&& rhs) noexcept
             : owner_(rhs.owner_), token_id_(rhs.token_id_),
-              is_segment_start_(rhs.is_segment_start_),
-              is_segment_end_(rhs.is_segment_end_), slots_(std::move(rhs.slots_)),
+              is_shot_start_(rhs.is_shot_start_),
+              is_shot_end_(rhs.is_shot_end_), slots_(std::move(rhs.slots_)),
               published_(rhs.published_)
         {
             rhs.owner_ = nullptr;
         }
 
-        WriteBatchToken& operator=(WriteBatchToken&& rhs) noexcept
+        WriteReservation& operator=(WriteReservation&& rhs) noexcept
         {
             if (this == &rhs)
             {
@@ -251,23 +257,23 @@ template <typename T> class Pipe : public PipeBase
             release();
             owner_ = rhs.owner_;
             token_id_ = rhs.token_id_;
-            is_segment_start_ = rhs.is_segment_start_;
-            is_segment_end_ = rhs.is_segment_end_;
+            is_shot_start_ = rhs.is_shot_start_;
+            is_shot_end_ = rhs.is_shot_end_;
             slots_ = std::move(rhs.slots_);
             published_ = rhs.published_;
             rhs.owner_ = nullptr;
             return *this;
         }
 
-        WriteBatchToken(const WriteBatchToken&) = delete;
-        WriteBatchToken& operator=(const WriteBatchToken&) = delete;
+        WriteReservation(const WriteReservation&) = delete;
+        WriteReservation& operator=(const WriteReservation&) = delete;
 
-        ~WriteBatchToken()
+        ~WriteReservation()
         {
             release();
         }
 
-        size_t size() const noexcept
+        size_t frame_count() const noexcept
         {
             return slots_.size();
         }
@@ -276,18 +282,18 @@ template <typename T> class Pipe : public PipeBase
         {
             if (index >= slots_.size())
             {
-                throw std::out_of_range("write batch index out of range");
+                throw std::out_of_range("write frame index out of range");
             }
-            return owner_->baskets_[slots_[index]];
+            return owner_->frames_[slots_[index]];
         }
 
         const T& value(size_t index) const
         {
             if (index >= slots_.size())
             {
-                throw std::out_of_range("write batch index out of range");
+                throw std::out_of_range("write frame index out of range");
             }
-            return owner_->baskets_[slots_[index]];
+            return owner_->frames_[slots_[index]];
         }
 
         void publish() noexcept
@@ -298,21 +304,21 @@ template <typename T> class Pipe : public PipeBase
         {
             return published_;
         }
-        bool is_segment_start() const noexcept
+        bool is_shot_start() const noexcept
         {
-            return is_segment_start_;
+            return is_shot_start_;
         }
-        bool is_segment_end() const noexcept
+        bool is_shot_end() const noexcept
         {
-            return is_segment_end_;
+            return is_shot_end_;
         }
 
       private:
         friend class Pipe<T>;
-        WriteBatchToken(Pipe<T>* owner, size_t token_id, bool is_segment_start,
-                        bool is_segment_end, std::vector<size_t>&& slots)
-            : owner_(owner), token_id_(token_id), is_segment_start_(is_segment_start),
-              is_segment_end_(is_segment_end), slots_(std::move(slots))
+        WriteReservation(Pipe<T>* owner, size_t token_id, bool is_shot_start,
+                         bool is_shot_end, std::vector<size_t>&& slots)
+            : owner_(owner), token_id_(token_id), is_shot_start_(is_shot_start),
+              is_shot_end_(is_shot_end), slots_(std::move(slots))
         {
         }
 
@@ -325,16 +331,16 @@ template <typename T> class Pipe : public PipeBase
             if (published_)
             {
                 recordreplay::detail::RecordReplayRegistry::instance().try_record_slots(
-                    *owner_, slots_, owner_->baskets_);
+                    *owner_, slots_, owner_->frames_);
             }
-            owner_->release_write_batch(token_id_, published_);
+            owner_->release_write_reservation(token_id_, published_);
             owner_ = nullptr;
         }
 
         Pipe<T>* owner_ = nullptr;
         size_t token_id_ = 0;
-        bool is_segment_start_ = false;
-        bool is_segment_end_ = false;
+        bool is_shot_start_ = false;
+        bool is_shot_end_ = false;
         std::vector<size_t> slots_;
         bool published_ = false;
     };
@@ -346,9 +352,9 @@ template <typename T> class Pipe : public PipeBase
 
         ReadToken(ReadToken&& rhs) noexcept
             : owner_(rhs.owner_), token_id_(rhs.token_id_),
-              is_segment_start_(rhs.is_segment_start_),
-              is_segment_end_(rhs.is_segment_end_), slots_(std::move(rhs.slots_)),
-              overlap_size_(rhs.overlap_size_), read_size_(rhs.read_size_)
+              is_shot_start_(rhs.is_shot_start_),
+              is_shot_end_(rhs.is_shot_end_), slots_(std::move(rhs.slots_)),
+              overlap_frames_(rhs.overlap_frames_), frame_count_(rhs.frame_count_)
         {
             rhs.owner_ = nullptr;
         }
@@ -362,11 +368,11 @@ template <typename T> class Pipe : public PipeBase
             release();
             owner_ = rhs.owner_;
             token_id_ = rhs.token_id_;
-            is_segment_start_ = rhs.is_segment_start_;
-            is_segment_end_ = rhs.is_segment_end_;
+            is_shot_start_ = rhs.is_shot_start_;
+            is_shot_end_ = rhs.is_shot_end_;
             slots_ = std::move(rhs.slots_);
-            overlap_size_ = rhs.overlap_size_;
-            read_size_ = rhs.read_size_;
+            overlap_frames_ = rhs.overlap_frames_;
+            frame_count_ = rhs.frame_count_;
             rhs.owner_ = nullptr;
             return *this;
         }
@@ -379,69 +385,69 @@ template <typename T> class Pipe : public PipeBase
             release();
         }
 
-        size_t size() const noexcept
+        size_t frame_count() const noexcept
         {
-            return read_size_;
+            return frame_count_;
         }
-        size_t overlap_size() const noexcept
+        size_t overlap_frames() const noexcept
         {
-            return overlap_size_;
+            return overlap_frames_;
         }
-        bool is_segment_start() const noexcept
+        bool is_shot_start() const noexcept
         {
-            return is_segment_start_;
+            return is_shot_start_;
         }
-        bool is_segment_end() const noexcept
+        bool is_shot_end() const noexcept
         {
-            return is_segment_end_;
+            return is_shot_end_;
         }
 
         T& mutable_value(size_t index)
         {
-            if (index >= read_size_)
+            if (index >= frame_count_)
             {
-                throw std::out_of_range("read token index out of range");
+                throw std::out_of_range("read frame index out of range");
             }
-            return owner_->baskets_[slots_[index]];
+            return owner_->frames_[slots_[index]];
         }
 
         const T& value(size_t index) const
         {
-            if (index >= read_size_)
+            if (index >= frame_count_)
             {
-                throw std::out_of_range("read token index out of range");
+                throw std::out_of_range("read frame index out of range");
             }
-            return owner_->baskets_[slots_[index]];
+            return owner_->frames_[slots_[index]];
         }
 
         T& mutable_value()
         {
-            if (read_size_ != 1)
+            if (frame_count_ != 1)
             {
                 throw std::logic_error(
-                    "read token contains multiple values; use mutable_value(index)");
+                    "read token contains multiple frames; use mutable_value(index)");
             }
             return mutable_value(0);
         }
 
         const T& value() const
         {
-            if (read_size_ != 1)
+            if (frame_count_ != 1)
             {
                 throw std::logic_error(
-                    "read token contains multiple values; use value(index)");
+                    "read token contains multiple frames; use value(index)");
             }
             return value(0);
         }
 
       private:
         friend class Pipe<T>;
-        ReadToken(Pipe<T>* owner, size_t token_id, bool is_segment_start,
-                  bool is_segment_end, std::vector<size_t>&& slots,
-                  size_t overlap_size, size_t read_size)
-            : owner_(owner), token_id_(token_id), is_segment_start_(is_segment_start),
-              is_segment_end_(is_segment_end), slots_(std::move(slots)),
-              overlap_size_(overlap_size), read_size_(read_size)
+        ReadToken(Pipe<T>* owner, size_t token_id, bool is_shot_start,
+                  bool is_shot_end, std::vector<size_t>&& slots,
+                  size_t overlap_frames, size_t frame_count)
+            : owner_(owner), token_id_(token_id), is_shot_start_(is_shot_start),
+              is_shot_end_(is_shot_end), slots_(std::move(slots)),
+              overlap_frames_(overlap_frames), frame_count_(frame_count)
         {
         }
 
@@ -451,41 +457,41 @@ template <typename T> class Pipe : public PipeBase
             {
                 return;
             }
-            owner_->release_read_batch(token_id_);
+            owner_->release_read_window(token_id_);
             owner_ = nullptr;
         }
 
         Pipe<T>* owner_ = nullptr;
         size_t token_id_ = 0;
-        bool is_segment_start_ = false;
-        bool is_segment_end_ = false;
+        bool is_shot_start_ = false;
+        bool is_shot_end_ = false;
         std::vector<size_t> slots_;
-        size_t overlap_size_ = 0;
-        size_t read_size_ = 0;
+        size_t overlap_frames_ = 0;
+        size_t frame_count_ = 0;
     };
 
   private:
-    WriteBatchToken acquire_write_token(size_t count, bool is_segment_end)
+    WriteReservation acquire_write_reservation(size_t frame_count, bool is_shot_end)
     {
         require_initialized();
-        auto batch = core_->acquire_write_batch(count, is_segment_end);
-        return WriteBatchToken(this, batch.token_id, batch.is_segment_start,
-                               batch.is_segment_end, std::move(batch.slots));
+        auto reservation = core_->reserve_write(frame_count, is_shot_end);
+        return WriteReservation(this, reservation.token_id, reservation.is_shot_start,
+                                reservation.is_shot_end, std::move(reservation.slots));
     }
 
-    void release_write_batch(size_t token_id, bool published)
+    void release_write_reservation(size_t token_id, bool published)
     {
-        core_->release_write_batch(token_id, published);
+        core_->release_write_reservation(token_id, published);
     }
 
-    void release_read_batch(size_t token_id)
+    void release_read_window(size_t token_id)
     {
-        core_->release_read_batch(token_id);
+        core_->release_read_window(token_id);
     }
 
     std::unique_ptr<PipeCore> core_;
-    std::unique_ptr<T> basket_template_;
-    std::vector<T> baskets_;
+    std::unique_ptr<T> frame_template_;
+    std::vector<T> frames_;
     PipeDescriptor descriptor_;
     std::string configuration_error_;
 };

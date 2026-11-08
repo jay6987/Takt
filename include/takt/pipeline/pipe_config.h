@@ -30,9 +30,9 @@ struct FramesPerRead
     size_t value;
 };
 
-struct Overlap
+struct OverlapFrames
 {
-    explicit constexpr Overlap(size_t value) noexcept : value(value) {}
+    explicit constexpr OverlapFrames(size_t value) noexcept : value(value) {}
     size_t value;
 };
 
@@ -51,40 +51,40 @@ constexpr FramesPerRead frames_per_read(size_t value) noexcept
     return FramesPerRead(value);
 }
 
-constexpr Overlap overlap(size_t value) noexcept
+constexpr OverlapFrames overlap_frames(size_t value) noexcept
 {
-    return Overlap(value);
+    return OverlapFrames(value);
 }
 
 struct ProducerConfig
 {
     ProducerConfig() = default;
     ProducerConfig(std::string name, Concurrency concurrency = takt::concurrency(1),
-                   FramesPerWrite frames = frames_per_write(1))
+                   FramesPerWrite frames = takt::frames_per_write(1))
         : name(std::move(name)), concurrency(concurrency.value),
-          write_size(frames.value)
+          frames_per_write(frames.value)
     {
     }
 
     std::string name;
     size_t concurrency = 1;
-    size_t write_size = 1;
+    size_t frames_per_write = 1;
 };
 
 struct ConsumerConfig
 {
     ConsumerConfig() = default;
     ConsumerConfig(std::string name, Concurrency concurrency = takt::concurrency(1),
-                   FramesPerRead frames = frames_per_read(1),
-                   Overlap overlap = takt::overlap(0))
+                   FramesPerRead frames = takt::frames_per_read(1),
+                   OverlapFrames overlap = takt::overlap_frames(0))
         : name(std::move(name)), concurrency(concurrency.value),
-          read_size(frames.value), overlap_size(overlap.value)
+          frames_per_read(frames.value), overlap_frames(overlap.value)
     {
     }
 
     std::string name;
     size_t concurrency = 1;
-    size_t read_size = 1;
-    size_t overlap_size = 0;
+    size_t frames_per_read = 1;
+    size_t overlap_frames = 0;
 };
 } // namespace takt

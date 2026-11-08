@@ -5,11 +5,11 @@
 A `Pipe<T>` is a stable connection object that becomes a fixed-capacity,
 preallocated circular belt only after explicit initialization.
 
-- Construction stores the name but allocates no runtime baskets.
+- Construction stores the name but allocates no runtime frames.
 - Both ends configure the same object; equal names do not share state.
-- Capacity, typed producer template, descriptors and history policy are
+- Slot capacity, typed producer frame template, and descriptors are
   configured before initialization. Capacity is fixed once initialized.
-- Baskets are reused, not dynamically allocated per transfer.
+- Frame slots are reused, not dynamically allocated per transfer.
 - Writers and readers are blocked by condition variables.
 
 ## Preparation Lifecycle
@@ -25,17 +25,17 @@ declaration throws; initialization freezes all configuration. Repeating
 `initialize()` throws rather than replacing resources. Initialization has a
 strong exception guarantee: failed allocation/copy/validation leaves the
 configuration intact and no partial runtime; it can be corrected and retried.
-The producer template is available via `basket_template()` during configuration,
-without consulting a runtime basket. Producer/consumer config and descriptor
+The producer template is available via `frame_template()` during configuration,
+without consulting runtime frame storage. Producer/consumer config and descriptor
 queries remain available after initialization.
 
-Before initialization, `size()` is zero, `closed()` and `faulted()` are false,
-and `fault_message()` is empty unless cancelled/faulted explicitly. `capacity()`
-returns the explicit capacity when set, otherwise resolves the two configured
+Before initialization, `queued_frame_count()` is zero, `closed()` and `faulted()`
+are false, and `fault_message()` is empty unless cancelled/faulted explicitly.
+`slot_capacity()` returns the explicit capacity when set, otherwise resolves the two configured
 ends or throws for missing configuration/overflow. Every acquisition entry
 point throws before initialization instead of blocking.
 
-Configuration-time `close()` safely cancels without allocating baskets;
+Configuration-time `close()` safely cancels without allocating frames;
 `close_with_error(message)` also preserves the first nonempty failure.
 Empty error messages are rejected. Cancellation prevents further configuration
 and initialization and does not turn uninitialized reads into normal EOF.
@@ -54,7 +54,7 @@ See [Pipe Usage](pipe-usage.md) for capacity formulas and API migration.
 nodes and nested runtimes, even when a node has no pipe-closing override.
 Stopping a nonfailed runtime makes it terminal (`Stopped`): later initialization
 or start is rejected. Stopping before initialization cancels uninitialized
-registered pipes without allocating baskets. Cleanup via repeated stop/join
+registered pipes without allocating frames. Cleanup via repeated stop/join
 remains safe; a failed runtime preserves its original failure.
 
 ## States
@@ -67,21 +67,21 @@ remains safe; a failed runtime preserves its original failure.
 
 ## Write Side
 
-- `acquire_write()` reserves the configured `write_size` and does not end the Shot.
-- `acquire_shot_end_write(count)` reserves 1 through `write_size` slots and
+- `acquire_write()` reserves the configured `frames_per_write` and does not end the Shot.
+- `acquire_shot_end_write(count)` reserves 1 through `frames_per_write` slots and
   explicitly ends the Shot.
-- Acquiring a count above `write_size` or available capacity throws instead of waiting forever.
+- Acquiring a count above `frames_per_write` or available capacity throws instead of waiting forever.
 - `publish()` marks the token as committed, but read visibility still follows acquire order.
 - A later published token does not become visible until all earlier write tokens are released and published.
 - A published write token that remains alive still holds capacity and does not complete visibility progression until it is released.
 - If an earlier write token is released without `publish()`, the pipe enters a sticky fault path and later reserved writes are not exposed to readers.
 - Once faulted, future write acquisition throws `PipeFaultedError`.
 - Fault status can be queried with `faulted()` and `fault_message()`.
-- Write tokens expose `is_segment_start()` and `is_segment_end()` metadata.
+- Write tokens expose `is_shot_start()` and `is_shot_end()` metadata.
 - `close()` closes the pipe and wakes waiters before reporting an unfinished Shot
-  with `PipeUnterminatedSegmentError`. It does not create a ShotEnd. Published
+  with `PipeUnterminatedShotError`. It does not create a ShotEnd. Published
   data from the unfinished Shot remains drainable; its last read window is not
-  marked as a segment end, then readers receive `PipeClosedAndEmptySignal`.
+  marked as a ShotEnd, then readers receive `PipeClosedAndEmptySignal`.
 
 ## Read Side
 
@@ -89,17 +89,17 @@ remains safe; a failed runtime preserves its original failure.
   read token.
 - Use `value(index)` / `mutable_value(index)` for windows; indexless access is
   valid only when the returned window has one value.
-- `overlap_size < read_size` must hold.
-- The window advances by `read_size - overlap_size`.
+- `overlap_frames < frames_per_read` must hold.
+- The window advances by `frames_per_read - overlap_frames`.
 - During an open Shot, a window becomes readable once its full stride of newly
   published slots is available; it does not wait for ShotEnd.
-- Read windows are bounded by committed segment ends and do not cross segments;
+- Read windows are bounded by committed Shot ends and do not cross Shots;
   ShotEnd may return a shorter final window.
-- Read tokens expose `is_segment_start()` and `is_segment_end()` metadata.
-- Multiple active read tokens reserve successive segments without releasing
-  earlier baskets. Active tokens pin their slots until destroyed.
+- Read tokens expose `is_shot_start()` and `is_shot_end()` metadata.
+- Multiple active read tokens reserve successive windows without releasing
+  earlier frames. Active tokens pin their slots until destroyed.
 - Overlap slots stay in the ring buffer until they are no longer needed. The
-  first read in each segment has zero overlap; overlap never crosses a segment
+  first read in each Shot has zero overlap; overlap never crosses a Shot
   end.
 - Overlapping tokens can reference the same ring slots. Treat overlap values as
   read-only while another active token may be using them.
@@ -122,7 +122,8 @@ Image backpressure is centralized in the pipe; task admission is bounded too.
 Producer side usually calls `close()` when no more data will be written.
 Close rejects new write reservations, but existing writers may finish.
 Readers wait for those reservations before reporting terminal status. An
-unterminated successful segment prefix is sealed for draining during closure.
+unfinished Shot's published prefix remains drainable during closure without
+being marked as a ShotEnd.
 
 Consumer loops should catch `PipeClosedAndEmptySignal` and exit gracefully.
 

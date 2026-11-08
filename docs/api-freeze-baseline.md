@@ -66,13 +66,17 @@ See [Changelog](../CHANGELOG.md) and
 - `class PipeBase`
 - `struct ProducerConfig`
 - `struct ConsumerConfig`
-- `struct Concurrency`, `struct FramesPerWrite`, `struct FramesPerRead`, `struct Overlap`
+- `struct Concurrency`, `struct FramesPerWrite`, `struct FramesPerRead`, `struct OverlapFrames`
 - `constexpr Concurrency concurrency(size_t) noexcept`
 - `constexpr FramesPerWrite frames_per_write(size_t) noexcept`
 - `constexpr FramesPerRead frames_per_read(size_t) noexcept`
-- `constexpr Overlap overlap(size_t) noexcept`
+- `constexpr OverlapFrames overlap_frames(size_t) noexcept`
 - `enum class BufferPolicy`
 - `template <typename T> class Pipe`
+- `PipeBase::set_slot_capacity(size_t)` and `PipeBase::slot_capacity()`
+- `Pipe<T>::queued_frame_count()`, `Pipe<T>::acquire_write()`,
+  `Pipe<T>::acquire_shot_end_write(size_t)`, and `Pipe<T>::acquire_read()`
+- `WriteToken::frame_count()` and `ReadToken::frame_count()`
 - `class AnyPipeEndpoint`
 - `AnyPipeEndpoint::supports_direct_to(const AnyPipeEndpoint&) const noexcept`
 - `MappingTransportInfo classify_mapping(const AnyPipeEndpoint&, const AnyPipeEndpoint&)`

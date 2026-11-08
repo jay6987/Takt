@@ -15,9 +15,9 @@ struct PipeClosedAndEmptySignal : public std::runtime_error
     PipeClosedAndEmptySignal() : std::runtime_error("pipe is closed and empty") {}
 };
 
-struct PipeUnterminatedSegmentError : public std::runtime_error
+struct PipeUnterminatedShotError : public std::runtime_error
 {
-    explicit PipeUnterminatedSegmentError(const std::string& message)
+    explicit PipeUnterminatedShotError(const std::string& message)
         : std::runtime_error(message)
     {
     }
@@ -38,60 +38,60 @@ struct PipeWriteAbandonedError : public PipeFaultedError
     }
 };
 
-struct PipeCoreWriteBatch
+struct PipeCoreWriteReservation
 {
     size_t token_id = 0;
-    size_t start_pos = 0;
-    bool is_segment_start = false;
-    bool is_segment_end = false;
+    size_t start_frame_index = 0;
+    bool is_shot_start = false;
+    bool is_shot_end = false;
     std::vector<size_t> slots;
 };
 
-struct PipeCoreReadWindow
+struct PipeCoreFrameWindow
 {
     size_t token_id = 0;
-    size_t start_pos = 0;
-    bool is_segment_start = false;
-    bool is_segment_end = false;
+    size_t start_frame_index = 0;
+    bool is_shot_start = false;
+    bool is_shot_end = false;
     std::vector<size_t> slots;
-    size_t read_size = 0;
-    size_t overlap_size = 0;
-    size_t stride = 0;
+    size_t frame_count = 0;
+    size_t overlap_frames = 0;
+    size_t new_frame_count = 0;
 };
 
 class PipeCore
 {
   public:
-    PipeCore(std::string name, size_t capacity, size_t retained_overlap,
-             size_t max_write_size);
+    PipeCore(std::string name, size_t slot_capacity, size_t retained_overlap_frames,
+             size_t max_frames_per_write);
 
     PipeCore(const PipeCore&) = delete;
     PipeCore& operator=(const PipeCore&) = delete;
 
     const std::string& name() const noexcept;
-    size_t capacity() const noexcept;
+    size_t slot_capacity() const noexcept;
 
-    size_t size() const noexcept;
+    size_t queued_frame_count() const noexcept;
     bool closed() const noexcept;
     bool faulted() const noexcept;
     std::string fault_message() const;
     void close();
     void close_with_error(std::string message);
 
-    PipeCoreWriteBatch acquire_write_batch(size_t count, bool is_segment_end);
-    void release_write_batch(size_t token_id, bool published);
+    PipeCoreWriteReservation reserve_write(size_t frame_count, bool is_shot_end);
+    void release_write_reservation(size_t token_id, bool published);
 
-    PipeCoreReadWindow acquire_read_window(size_t read_size, size_t overlap_size);
-    void release_read_batch(size_t token_id);
+    PipeCoreFrameWindow acquire_read_window(size_t frames_per_read, size_t overlap_frames);
+    void release_read_window(size_t token_id);
 
   private:
     struct PendingWrite
     {
         size_t token_id = 0;
-        size_t start_pos = 0;
-        size_t size = 0;
-        bool is_segment_start = false;
-        bool is_segment_end = false;
+        size_t start_frame_index = 0;
+        size_t frame_count = 0;
+        bool is_shot_start = false;
+        bool is_shot_end = false;
         bool released = false;
         bool published = false;
     };
@@ -99,38 +99,38 @@ class PipeCore
     struct PendingRead
     {
         size_t token_id = 0;
-        size_t start_pos = 0;
-        size_t stride = 0;
+        size_t start_frame_index = 0;
+        size_t new_frame_count = 0;
         bool released = false;
     };
 
-    size_t position_to_slot(size_t absolute_pos) const noexcept;
-    size_t reusable_read_pos_locked() const noexcept;
+    size_t frame_index_to_slot(size_t frame_index) const noexcept;
+    size_t reusable_frame_start_locked() const noexcept;
     void flush_released_writes_locked();
     void flush_released_reads_locked();
     [[noreturn]] void throw_terminal_locked() const;
-    size_t next_segment_end_locked() const;
-    size_t next_read_end_locked() const;
+    size_t next_shot_end_frame_locked() const;
+    size_t visible_frame_end_locked() const;
     PendingWrite& find_write_locked(size_t token_id);
     PendingRead& find_read_locked(size_t token_id);
 
     std::string name_;
-    const size_t capacity_;
-    const size_t retained_overlap_;
-    const size_t max_write_size_;
+    const size_t slot_capacity_;
+    const size_t retained_overlap_frames_;
+    const size_t max_frames_per_write_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
 
     size_t next_token_id_ = 1;
-    size_t write_reserve_pos_ = 0;
-    size_t write_visible_pos_ = 0;
-    size_t read_reserve_pos_ = 0;
-    size_t read_release_pos_ = 0;
-    size_t read_segment_start_pos_ = 0;
+    size_t write_reserved_frame_end_ = 0;
+    size_t write_visible_frame_end_ = 0;
+    size_t read_reserved_frame_end_ = 0;
+    size_t read_released_frame_end_ = 0;
+    size_t read_shot_start_frame_index_ = 0;
 
-    bool next_write_is_segment_start_ = true;
-    std::deque<size_t> committed_segment_ends_;
+    bool next_write_is_shot_start_ = true;
+    std::deque<size_t> committed_shot_ends_;
 
     std::deque<PendingWrite> pending_writes_;
     std::deque<PendingRead> pending_reads_;

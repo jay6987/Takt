@@ -17,7 +17,7 @@ and cancellation phases live outside this diagram; see [Pipe Lifecycle](pipe-lif
 1. Open-Active
 - closed is false
 - producers can reserve the configured write size or an explicit count if free slots exist
-- consumers can acquire read batches if readable data exists
+- consumers can acquire read windows if readable frames exist
 
 2. Open-WriterBlocked
 - closed is false

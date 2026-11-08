@@ -61,15 +61,15 @@ int main() {
     auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in");
     outer_in->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     outer_in->set_consumer(
-        {"worker", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        {"worker", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out");
     outer_out->set_producer({"worker", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     outer_out->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     auto inner_in = outer_in;
     auto inner_out = outer_out;
     for (const auto& pipe : {outer_in, outer_out})
-        pipe->set_capacity(16);
+        pipe->set_slot_capacity(16);
 
     auto inner = takt::PipelineBuilder::declare("inner");
     inner.add_node("worker");

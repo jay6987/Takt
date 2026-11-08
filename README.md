@@ -8,7 +8,7 @@ Current implementation status:
 - Native pipeline headers are available under `include/takt/pipeline/`.
 - Official node worker base is `Node`.
 - `Pipe<T>` has explicit configuration/initialization, fixed-capacity preallocation,
-  blocking backpressure, batch read/write tokens, and overlap-window reads.
+  blocking backpressure, frame-count write tokens, and overlap-window reads.
 - Node execution is task-driven with a built-in ingress manager and worker pool: users implement `build_task(sequence_id)` and `process_task(worker_index, task)`.
 - Structured exception context is available through `NodeExceptionContext` and default logs include stage/pipe/worker metadata.
 - Subgraphs retain logical grouping without mandatory transfer threads: typed
@@ -108,15 +108,15 @@ registry. Stop and join running nodes before releasing their dependencies.
   same object, then initialize. Names are labels and do not share connections.
 - `PipelineRuntime::initialize()` prepares bound endpoint pipes and nested
   runtimes; call it before `start()`. Direct runtimes can receive explicit pipes.
-- Single-element or batch reads use `acquire_read()`, which follows the
-  consumer's configured `read_size` and `overlap_size`.
-- `acquire_write()` reserves the configured `write_size` without ending the
-  Shot; `acquire_shot_end_write(count)` reserves up to `write_size` and
+- Single-frame or multi-frame reads use `acquire_read()`, which follows the
+  consumer's configured `frames_per_read` and `overlap_frames`.
+- `acquire_write()` reserves the configured `frames_per_write` without ending the
+  Shot; `acquire_shot_end_write(count)` reserves up to `frames_per_write` and
   explicitly ends the Shot.
 - Closing an unfinished Shot closes and wakes the pipe before throwing
-  `PipeUnterminatedSegmentError`; it never fabricates a ShotEnd.
-- Write/read tokens expose `is_segment_start()` and `is_segment_end()` metadata.
-- Read batches are segment-bounded and never cross committed segment ends.
+  `PipeUnterminatedShotError`; it never fabricates a ShotEnd.
+- Write/read tokens expose `is_shot_start()` and `is_shot_end()` metadata.
+- Read windows are Shot-bounded and never cross committed Shot ends.
 - `PipeClosedAndEmptySignal` is used for graceful pipeline termination.
 
 ### Breaking lifecycle and read API migration
@@ -125,19 +125,17 @@ registry. Stop and join running nodes before releasing their dependencies.
 deprecated compatibility wrappers. This applies equally to checkout and
 installed-package consumers:
 
-`acquire_read()` now always returns the window declared by `ConsumerConfig`.
-The former scalar-only, per-call batch, configured-batch, and mutable-read
-entry points are removed; use `ReadToken::size()` and `value(index)` to access
-the configured window. Overlap is retained in ring slots, so
-`ReadHistoryPolicy` and `set_read_history_policy()` are also removed.
+`acquire_read()` always returns the window declared by `ConsumerConfig`; use
+`ReadToken::frame_count()` and `value(index)` to access its frames. Overlap is
+retained in ring slots, not copied into a separate history buffer.
 
 ```cpp
 auto frames = std::make_shared<takt::Pipe<std::vector<float>>>("frames");
 frames->set_producer(
     {"source", takt::concurrency(1), takt::frames_per_write(1)}, std::vector<float>(1024));
 frames->set_consumer(
-    {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
-frames->set_capacity(2); // optional positive override, no concurrency lower bound
+    {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
+frames->set_slot_capacity(2); // optional positive override, no concurrency lower bound
 frames->initialize(); // standalone; a bound runtime can prepare it instead
 ```
 
@@ -149,7 +147,7 @@ concurrency 1, one frame per write/read and overlap 0.
 Without an explicit capacity, the default satisfies the larger endpoint slot
 demand; `request_max_concurrency()` requests their sum. Finish configuration
 before initialization and initialize before any prefill/close. See
-[Pipe Usage](docs/pipe-usage.md) for formulas, configured batches, and runtime
+[Pipe Usage](docs/pipe-usage.md) for formulas, configured frame counts, and runtime
 preparation. The library still requires C++17.
 
 ## Logger Injection

@@ -15,29 +15,29 @@ sequenceDiagram
 
     alt free slots available and not closed
         Core-->>Pipe: slots reserved
-        Pipe-->>Producer: WriteToken / WriteBatchToken
-        Producer->>Pipe: write values into baskets
+        Pipe-->>Producer: WriteToken / WriteReservation
+        Producer->>Pipe: write values into frames
         Producer->>Pipe: publish()
         Note over Producer,Pipe: data committed, token still owns reserved region
         Producer->>Pipe: token destructs / releases
-        Pipe->>Core: release_write_batch(token_id, published=true)
+        Pipe->>Core: release_write_reservation(token_id, published=true)
         Core-->>Core: advance contiguous visible write boundary in token order
         Core-->>Core: notify readers/writers
     else closed or no space
         Core-->>Producer: block or throw PipeClosedAndEmptySignal
     end
 
-    Note over Producer,Core: No-argument writes reserve write_size and are not ShotEnd; acquire_shot_end_write explicitly marks final writes
+    Note over Producer,Core: No-argument writes reserve frames_per_write and are not ShotEnd; acquire_shot_end_write explicitly marks final writes
 
     opt close with an unfinished Shot
         Producer->>Pipe: close()
         Pipe->>Core: close and notify waiters
-        Core-->>Producer: throw PipeUnterminatedSegmentError
+        Core-->>Producer: throw PipeUnterminatedShotError
         Note over Pipe,Core: Published tail remains drainable without a fabricated ShotEnd
     end
 
     opt token destroyed without publish
-        Pipe->>Core: release_write_batch(count, published=false)
+        Pipe->>Core: release_write_reservation(count, published=false)
         Core-->>Core: mark sticky fault on earliest unresolved write gap
         Core-->>Core: close future write acquisition
         Core-->>Core: future acquire_write throws PipeFaultedError
@@ -47,8 +47,8 @@ sequenceDiagram
 ## Notes
 
 - Capacity reservation happens before producer writes element payload.
-- Each write token carries segment metadata: `is_segment_start` and `is_segment_end`.
-- Segment boundaries are committed in write-token order with the same visibility rules as payload data.
+- Each write token carries Shot metadata: `is_shot_start` and `is_shot_end`.
+- Shot boundaries are committed in write-token order with the same visibility rules as payload data.
 - `publish()` does not by itself make data visible to readers.
 - Visibility advances when a published write token is released, and only if all earlier write tokens have already been released and published.
 - A published token that remains alive still occupies capacity and can stall downstream visibility.

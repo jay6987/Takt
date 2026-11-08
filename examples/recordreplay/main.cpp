@@ -16,13 +16,13 @@ int main()
         record_pipe.set_producer(
             {"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
         record_pipe.set_consumer(
-            {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(0)});
-        record_pipe.set_capacity(8);
+            {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap_frames(0)});
+        record_pipe.set_slot_capacity(8);
         record_pipe.initialize();
         auto record =
             takt::recordreplay::make_scoped_record(record_pipe, file_path);
 
-        // Write one batch into the pipe. Recording happens when the published write
+        // Write one frame group into the pipe. Recording happens when the published write
         // token is released.
         auto w = record_pipe.acquire_shot_end_write(3);
         w.value(0) = 101;
@@ -38,8 +38,8 @@ int main()
         replay_pipe.set_producer(
             {"seed", takt::concurrency(1), takt::frames_per_write(3)}, 0);
         replay_pipe.set_consumer({"replay", takt::concurrency(1),
-                                  takt::frames_per_read(3), takt::overlap(0)});
-        replay_pipe.set_capacity(8);
+                                  takt::frames_per_read(3), takt::overlap_frames(0)});
+        replay_pipe.set_slot_capacity(8);
         replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, file_path);

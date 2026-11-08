@@ -46,7 +46,7 @@ class SingleWorkerDoubleAgent final : public takt::Node
             try
             {
                 auto input = in_.acquire_read();
-                auto output = input.is_segment_end() ? out_.acquire_shot_end_write(1)
+                auto output = input.is_shot_end() ? out_.acquire_shot_end_write(1)
                                                      : out_.acquire_write();
                 output.value() = input.value() * 2;
                 output.publish();

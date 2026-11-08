@@ -210,7 +210,7 @@ RecordReplayRegistry::find_codec_impl(std::type_index type) const
 
 void RecordReplayRegistry::try_record_slots_impl(
     std::type_index type, const void* pipe_id, const std::vector<size_t>& slots,
-    const void* baskets, size_t basket_size,
+    const void* frames, size_t frame_size,
     const std::function<TypeErasedCodec()>& resolve_codec) noexcept
 {
     try
@@ -233,10 +233,10 @@ void RecordReplayRegistry::try_record_slots_impl(
         }
 
         const auto codec = resolve_codec();
-        const auto* basket_bytes = static_cast<const char*>(baskets);
+        const auto* frame_bytes = static_cast<const char*>(frames);
         for (size_t slot : slots)
         {
-            codec.record_one(*channel->record, basket_bytes + (slot * basket_size));
+            codec.record_one(*channel->record, frame_bytes + (slot * frame_size));
         }
         channel->record->flush();
     }
@@ -248,7 +248,7 @@ void RecordReplayRegistry::try_record_slots_impl(
 
 void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* pipe_id,
                                              const std::vector<size_t>& slots,
-                                             void* baskets, size_t basket_size,
+                                             void* frames, size_t frame_size,
                                              const std::function<TypeErasedCodec()>& resolve_codec)
 {
     std::shared_ptr<PipeChannel> channel;
@@ -269,10 +269,10 @@ void RecordReplayRegistry::replay_slots_impl(std::type_index type, const void* p
     }
 
     const auto codec = resolve_codec();
-    auto* basket_bytes = static_cast<char*>(baskets);
+    auto* frame_bytes = static_cast<char*>(frames);
     for (size_t slot : slots)
     {
-        codec.replay_one(*channel->replay, basket_bytes + (slot * basket_size));
+        codec.replay_one(*channel->replay, frame_bytes + (slot * frame_size));
         if (channel->replay->fail())
         {
             throw std::runtime_error("replay stream read failed");

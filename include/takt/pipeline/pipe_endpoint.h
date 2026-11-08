@@ -23,7 +23,7 @@ struct PipeEndpointTypeMismatchError : public std::runtime_error
 struct AnyPipePacket
 {
     std::any value;
-    bool is_segment_end = false;
+    bool is_shot_end = false;
 };
 
 class AnyPipeEndpoint
@@ -82,7 +82,7 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
         auto token = pipe_->acquire_read();
         AnyPipePacket packet;
         packet.value = token.value();
-        packet.is_segment_end = token.is_segment_end();
+        packet.is_shot_end = token.is_shot_end();
         return packet;
     }
 
@@ -106,7 +106,7 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
             throw PipeEndpointTypeMismatchError(oss.str());
         }
 
-        auto token = packet.is_segment_end ? pipe_->acquire_shot_end_write(1)
+        auto token = packet.is_shot_end ? pipe_->acquire_shot_end_write(1)
                                            : pipe_->acquire_write();
         token.value() = *typed_value;
         token.publish();
@@ -136,7 +136,7 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
                 "pipe endpoint type mismatch: " + debug_name() + " -> " +
                 target.debug_name());
         }
-        auto write_token = read_token.is_segment_end()
+        auto write_token = read_token.is_shot_end()
                                ? typed_target->pipe_->acquire_shot_end_write(1)
                                : typed_target->pipe_->acquire_write();
         using std::swap;

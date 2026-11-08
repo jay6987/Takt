@@ -74,7 +74,7 @@ class DoubleNode final : public takt::Node
             try
             {
                 auto r = in_->acquire_read();
-                auto w = r.is_segment_end() ? out_->acquire_shot_end_write(1)
+                auto w = r.is_shot_end() ? out_->acquire_shot_end_write(1)
                                             : out_->acquire_write();
                 w.value() = r.value() * 2;
                 w.publish();

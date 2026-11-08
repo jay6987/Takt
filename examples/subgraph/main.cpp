@@ -21,7 +21,7 @@ class DoubleNode final : public takt::Node
     struct DoubleTask final : public takt::Node::Task
     {
         int value = 0;
-        bool segment_end = false;
+        bool shot_end = false;
     };
 
     std::unique_ptr<takt::Node::Task> build_task(uint64_t) override
@@ -31,7 +31,7 @@ class DoubleNode final : public takt::Node
             auto r = in_->acquire_read();
             auto task = std::make_unique<DoubleTask>();
             task->value = r.value();
-            task->segment_end = r.is_segment_end();
+            task->shot_end = r.is_shot_end();
             return task;
         }
         catch (const takt::PipeClosedAndEmptySignal&)
@@ -44,7 +44,7 @@ class DoubleNode final : public takt::Node
     void process_task(size_t, takt::Node::Task& task) override
     {
         auto& t = static_cast<DoubleTask&>(task);
-        auto w = t.segment_end ? out_->acquire_shot_end_write(1)
+        auto w = t.shot_end ? out_->acquire_shot_end_write(1)
                                : out_->acquire_write();
         w.value() = t.value * 2;
         w.publish();
@@ -68,13 +68,13 @@ int main(int argc, char** argv)
     outer_in->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)},
                            0);
     outer_in->set_consumer({bridge ? "input-bridge" : "double", takt::concurrency(1),
-                            takt::frames_per_read(1), takt::overlap(0)});
+                            takt::frames_per_read(1), takt::overlap_frames(0)});
     auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out");
     outer_out->set_producer({bridge ? "output-bridge" : "double", takt::concurrency(1),
                              takt::frames_per_write(1)},
                             0);
     outer_out->set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap_frames(0)});
     auto inner_in = outer_in;
     auto inner_out = outer_out;
     if (bridge)
@@ -83,17 +83,17 @@ int main(int argc, char** argv)
         inner_in->set_producer(
             {"input-bridge", takt::concurrency(1), takt::frames_per_write(1)}, 0);
         inner_in->set_consumer({"double", takt::concurrency(1),
-                                takt::frames_per_read(1), takt::overlap(0)});
+                                takt::frames_per_read(1), takt::overlap_frames(0)});
         inner_out = std::make_shared<takt::Pipe<int>>("inner-out");
         inner_out->set_producer(
             {"double", takt::concurrency(1), takt::frames_per_write(1)}, 0);
         inner_out->set_consumer({"output-bridge", takt::concurrency(1),
-                                 takt::frames_per_read(1), takt::overlap(0)});
-        inner_in->set_capacity(16);
-        inner_out->set_capacity(16);
+                                 takt::frames_per_read(1), takt::overlap_frames(0)});
+        inner_in->set_slot_capacity(16);
+        inner_out->set_slot_capacity(16);
     }
-    outer_in->set_capacity(16);
-    outer_out->set_capacity(16);
+    outer_in->set_slot_capacity(16);
+    outer_out->set_slot_capacity(16);
 
     auto inner = takt::PipelineBuilder::declare("inner");
     inner.add_node("worker");

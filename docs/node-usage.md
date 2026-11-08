@@ -19,7 +19,7 @@ class DoubleNode final : public takt::Node
     struct DoubleTask final : public takt::Node::Task
     {
         int value = 0;
-        bool segment_end = false;
+        bool shot_end = false;
     };
 
     std::unique_ptr<takt::Node::Task> build_task(uint64_t) override
@@ -29,7 +29,7 @@ class DoubleNode final : public takt::Node
             auto r = in_->acquire_read();
             auto task = std::make_unique<DoubleTask>();
             task->value = r.value();
-            task->segment_end = r.is_segment_end();
+            task->shot_end = r.is_shot_end();
             return task;
         }
         catch (const takt::PipeClosedAndEmptySignal&)
@@ -42,7 +42,7 @@ class DoubleNode final : public takt::Node
     void process_task(size_t, takt::Node::Task& task) override
     {
         auto& t = static_cast<DoubleTask&>(task);
-        auto w = t.segment_end ? out_->acquire_shot_end_write(1)
+        auto w = t.shot_end ? out_->acquire_shot_end_write(1)
                                : out_->acquire_write();
         w.value() = t.value * 2;
         w.publish();
@@ -58,7 +58,7 @@ class DoubleNode final : public takt::Node
 
 - Create name-only input/output pipes and share each connection with its two ends.
 - Configure each pipe's producer/template and consumer, plus optional capacity,
-  descriptor and history policy. Participant concurrency describes slot demand;
+  descriptor and buffer policy. Participant concurrency describes slot demand;
   it is not required to equal a node's worker count.
 - Construct node with those same input/output pipes.
 - Choose worker count: default 1, or pass explicit count in constructor.

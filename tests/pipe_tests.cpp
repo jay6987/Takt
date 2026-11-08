@@ -86,13 +86,13 @@ TEST(PipeTests, SingleElementReadWrite)
     pipe.close();
 }
 
-TEST(PipeTests, BatchReadWrite)
+TEST(PipeTests, FrameWindowReadWrite)
 {
-    takt::Pipe<int> batch_pipe("batch");
-    configure_pipe(batch_pipe, 8, 0, 4, 0, 4);
-    batch_pipe.initialize();
+    takt::Pipe<int> window_pipe("window");
+    configure_pipe(window_pipe, 8, 0, 4, 0, 4);
+    window_pipe.initialize();
     {
-        auto wb = batch_pipe.acquire_shot_end_write(4);
+        auto wb = window_pipe.acquire_shot_end_write(4);
         wb.value(0) = 10;
         wb.value(1) = 20;
         wb.value(2) = 30;
@@ -100,12 +100,12 @@ TEST(PipeTests, BatchReadWrite)
         wb.publish();
     }
     {
-        auto rb = batch_pipe.acquire_read();
-        EXPECT_EQ(rb.size(), 4U);
+        auto rb = window_pipe.acquire_read();
+        EXPECT_EQ(rb.frame_count(), 4U);
         EXPECT_EQ(rb.value(0), 10);
         EXPECT_EQ(rb.value(3), 40);
     }
-    batch_pipe.close();
+    window_pipe.close();
 }
 
 TEST(PipeTests, MutableReadTokenSingleElementInplace)
@@ -137,9 +137,9 @@ TEST(PipeTests, MutableReadTokenSingleElementInplace)
     pipe.close();
 }
 
-TEST(PipeTests, MutableReadTokenBatchInplaceBeforeShotEnd)
+TEST(PipeTests, MutableReadTokenInPlaceBeforeShotEnd)
 {
-    takt::Pipe<int> pipe("mutable-batch");
+    takt::Pipe<int> pipe("mutable-window");
     configure_pipe(pipe, 8, 0, 4, 0, 4);
     pipe.initialize();
     {
@@ -153,8 +153,8 @@ TEST(PipeTests, MutableReadTokenBatchInplaceBeforeShotEnd)
 
     {
         auto r = pipe.acquire_read();
-        EXPECT_FALSE(r.is_segment_end());
-        for (size_t i = 0; i < r.size(); ++i)
+        EXPECT_FALSE(r.is_shot_end());
+        for (size_t i = 0; i < r.frame_count(); ++i)
         {
             r.mutable_value(i) += 10;
         }
@@ -177,35 +177,35 @@ TEST(PipeTests, MutableReadTokenBatchInplaceBeforeShotEnd)
 
 TEST(PipeTests, OverlapRead)
 {
-    takt::Pipe<int> batch_pipe("batch-overlap");
-    configure_pipe(batch_pipe, 8, 0, 4, 2, 4);
-    batch_pipe.initialize();
+    takt::Pipe<int> window_pipe("window-overlap");
+    configure_pipe(window_pipe, 8, 0, 4, 2, 4);
+    window_pipe.initialize();
     {
-        auto first_write = batch_pipe.acquire_write();
-        for (size_t i = 0; i < first_write.size(); ++i)
+        auto first_write = window_pipe.acquire_write();
+        for (size_t i = 0; i < first_write.frame_count(); ++i)
         {
             first_write.value(i) = static_cast<int>(i + 1); // 1..4
         }
         first_write.publish();
     }
     {
-        auto last_write = batch_pipe.acquire_shot_end_write(2);
+        auto last_write = window_pipe.acquire_shot_end_write(2);
         last_write.value(0) = 5;
         last_write.value(1) = 6;
         last_write.publish();
     }
-    auto first = batch_pipe.acquire_read(); // 1,2,3,4
+    auto first = window_pipe.acquire_read(); // 1,2,3,4
     EXPECT_EQ(first.value(0), 1);
     EXPECT_EQ(first.value(3), 4);
-    auto second = batch_pipe.acquire_read(); // 3,4,5,6
-    EXPECT_EQ(second.overlap_size(), 2U);
+    auto second = window_pipe.acquire_read(); // 3,4,5,6
+    EXPECT_EQ(second.overlap_frames(), 2U);
     EXPECT_EQ(second.value(0), 3);
     EXPECT_EQ(second.value(1), 4);
     EXPECT_EQ(second.value(2), 5);
     EXPECT_EQ(second.value(3), 6);
     EXPECT_EQ(&first.value(2), &second.value(0));
     EXPECT_EQ(&first.value(3), &second.value(1));
-    batch_pipe.close();
+    window_pipe.close();
 }
 
 TEST(PipeTests, ActiveReadTokensPinSlotsUntilReleased)
@@ -227,7 +227,7 @@ TEST(PipeTests, ActiveReadTokensPinSlotsUntilReleased)
 
     auto first = pipe.acquire_read();
     auto second = pipe.acquire_read();
-    ASSERT_EQ(second.overlap_size(), 1U);
+    ASSERT_EQ(second.overlap_frames(), 1U);
     EXPECT_EQ(&first.value(1), &second.value(0));
 
     auto writer = std::async(std::launch::async, [&pipe]
@@ -247,14 +247,14 @@ TEST(PipeTests, ActiveReadTokensPinSlotsUntilReleased)
 
     pipe.close();
     auto third = pipe.acquire_read();
-    ASSERT_EQ(third.size(), 1U);
-    EXPECT_EQ(third.overlap_size(), 0U);
+    ASSERT_EQ(third.frame_count(), 1U);
+    EXPECT_EQ(third.overlap_frames(), 0U);
     EXPECT_EQ(third.value(), 4);
 }
 
-TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
+TEST(PipeTests, ShotEndPreventsCrossShotRead)
 {
-    takt::Pipe<int> pipe("segment");
+    takt::Pipe<int> pipe("shot");
     configure_pipe(pipe, 16, 0, 8, 2, 4);
     pipe.initialize();
 
@@ -276,19 +276,19 @@ TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
 
     {
         auto r1 = pipe.acquire_read();
-        EXPECT_TRUE(r1.is_segment_start());
-        EXPECT_TRUE(r1.is_segment_end());
-        EXPECT_EQ(r1.size(), 3U);
-        EXPECT_EQ(r1.overlap_size(), 0U);
+        EXPECT_TRUE(r1.is_shot_start());
+        EXPECT_TRUE(r1.is_shot_end());
+        EXPECT_EQ(r1.frame_count(), 3U);
+        EXPECT_EQ(r1.overlap_frames(), 0U);
         EXPECT_EQ(r1.value(0), 1);
         EXPECT_EQ(r1.value(2), 3);
     }
     {
         auto r2 = pipe.acquire_read();
-        EXPECT_TRUE(r2.is_segment_start());
-        EXPECT_TRUE(r2.is_segment_end());
-        EXPECT_EQ(r2.size(), 4U);
-        EXPECT_EQ(r2.overlap_size(), 0U);
+        EXPECT_TRUE(r2.is_shot_start());
+        EXPECT_TRUE(r2.is_shot_end());
+        EXPECT_EQ(r2.frame_count(), 4U);
+        EXPECT_EQ(r2.overlap_frames(), 0U);
         EXPECT_EQ(r2.value(0), 10);
         EXPECT_EQ(r2.value(3), 13);
     }
@@ -296,32 +296,32 @@ TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
     pipe.close();
 }
 
-TEST(PipeTests, SegmentFlagsOnWriteTokens)
+TEST(PipeTests, ShotFlagsOnWriteTokens)
 {
-    takt::Pipe<int> pipe("segment-flags");
+    takt::Pipe<int> pipe("shot-flags");
     configure_pipe(pipe, 8, 0);
     pipe.initialize();
 
     auto w1 = pipe.acquire_write();
-    EXPECT_TRUE(w1.is_segment_start());
-    EXPECT_FALSE(w1.is_segment_end());
+    EXPECT_TRUE(w1.is_shot_start());
+    EXPECT_FALSE(w1.is_shot_end());
     w1.value() = 1;
     w1.publish();
 
     auto w2 = pipe.acquire_shot_end_write(1);
-    EXPECT_FALSE(w2.is_segment_start());
-    EXPECT_TRUE(w2.is_segment_end());
+    EXPECT_FALSE(w2.is_shot_start());
+    EXPECT_TRUE(w2.is_shot_end());
     w2.value() = 2;
     w2.publish();
 
     auto w3 = pipe.acquire_shot_end_write(1);
-    EXPECT_TRUE(w3.is_segment_start());
-    EXPECT_TRUE(w3.is_segment_end());
+    EXPECT_TRUE(w3.is_shot_start());
+    EXPECT_TRUE(w3.is_shot_end());
     w3.value() = 3;
     w3.publish();
 }
 
-TEST(PipeTests, ShotEndWriteUsesConfiguredSizeAndEndsSegment)
+TEST(PipeTests, ShotEndWriteUsesConfiguredSizeAndEndsShot)
 {
     takt::Pipe<int> pipe("write-size-contract");
     configure_pipe(pipe, 4, 0, 2, 0, 2);
@@ -329,16 +329,16 @@ TEST(PipeTests, ShotEndWriteUsesConfiguredSizeAndEndsSegment)
 
     {
         auto write = pipe.acquire_write();
-        EXPECT_EQ(write.size(), 2U);
-        EXPECT_FALSE(write.is_segment_end());
+        EXPECT_EQ(write.frame_count(), 2U);
+        EXPECT_FALSE(write.is_shot_end());
         write.value(0) = 10;
         write.value(1) = 11;
         write.publish();
     }
     {
         auto write = pipe.acquire_shot_end_write(1);
-        EXPECT_EQ(write.size(), 1U);
-        EXPECT_TRUE(write.is_segment_end());
+        EXPECT_EQ(write.frame_count(), 1U);
+        EXPECT_TRUE(write.is_shot_end());
         write.value() = 12;
         write.publish();
     }
@@ -346,15 +346,15 @@ TEST(PipeTests, ShotEndWriteUsesConfiguredSizeAndEndsSegment)
 
     {
         auto read = pipe.acquire_read();
-        EXPECT_EQ(read.size(), 2U);
-        EXPECT_FALSE(read.is_segment_end());
+        EXPECT_EQ(read.frame_count(), 2U);
+        EXPECT_FALSE(read.is_shot_end());
         EXPECT_EQ(read.value(0), 10);
         EXPECT_EQ(read.value(1), 11);
     }
     {
         auto read = pipe.acquire_read();
-        EXPECT_EQ(read.size(), 1U);
-        EXPECT_TRUE(read.is_segment_end());
+        EXPECT_EQ(read.frame_count(), 1U);
+        EXPECT_TRUE(read.is_shot_end());
         EXPECT_EQ(read.value(), 12);
     }
     pipe.close();
