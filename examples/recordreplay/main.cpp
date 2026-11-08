@@ -24,7 +24,7 @@ int main()
 
         // Write one batch into the pipe. Recording happens when the published write
         // token is released.
-        auto w = record_pipe.acquire_write_batch(3, true);
+        auto w = record_pipe.acquire_shot_end_write(3);
         w.value(0) = 101;
         w.value(1) = 202;
         w.value(2) = 303;
@@ -48,7 +48,7 @@ int main()
         // The subsequent read path replays persisted data into these slots before
         // exposing values.
         {
-            auto w = replay_pipe.acquire_write_batch(3, true);
+            auto w = replay_pipe.acquire_shot_end_write(3);
             w.value(0) = -1;
             w.value(1) = -1;
             w.value(2) = -1;
@@ -57,7 +57,7 @@ int main()
 
         // Expect replayed values to replace placeholders after the write token is
         // released.
-        auto r = replay_pipe.acquire_read_batch(3, 0);
+        auto r = replay_pipe.acquire_read();
         ok = (r.value(0) == 101) && (r.value(1) == 202) && (r.value(2) == 303);
     }
 

@@ -67,7 +67,8 @@ class FrameNode final : public takt::Node
         try
         {
             auto input = input_.acquire_read();
-            auto output = output_.acquire_write(input.is_segment_end());
+            auto output = input.is_segment_end() ? output_.acquire_shot_end_write(1)
+                                                 : output_.acquire_write();
             return std::make_unique<FrameTask>(std::move(input), std::move(output));
         }
         catch (const takt::PipeClosedAndEmptySignal&)
@@ -133,24 +134,22 @@ class BlockedNode final : public takt::Node
 };
 } // namespace
 
-TEST(PipelineContracts, DisabledHistoryDoesNotCopyPayloadAtReadRelease)
+TEST(PipelineContracts, OverlapWindowsReuseRingSlotsWithoutCopyingPayloads)
 {
     takt::Pipe<CopyProbe> pipe("no-history");
-    configure_pipe(pipe, 1, CopyProbe{}, takt::ReadHistoryPolicy::Disabled);
+    configure_pipe(pipe, 3, CopyProbe{}, 2, 1, 3);
     pipe.initialize();
-    CopyProbe::copies = 0;
     {
-        auto write = pipe.acquire_write();
+        auto write = pipe.acquire_shot_end_write(3);
         write.publish();
     }
+    CopyProbe::copies = 0;
 
-    {
-        auto read = pipe.acquire_read();
-        auto retained = std::move(read);
-        (void)retained.value();
-    }
+    auto first = pipe.acquire_read();
+    auto second = pipe.acquire_read();
+    ASSERT_EQ(second.overlap_size(), 1U);
+    EXPECT_EQ(&first.value(1), &second.value(0));
     EXPECT_EQ(CopyProbe::copies, 0);
-    EXPECT_THROW((void)pipe.acquire_read_batch(1, 1), std::invalid_argument);
     pipe.close();
 }
 
@@ -175,7 +174,6 @@ TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
     configure_pipe(pipe, 1, 0);
     pipe.initialize();
     std::optional<takt::Pipe<int>::WriteToken> write(pipe.acquire_write());
-    pipe.close();
     auto reader = std::async(std::launch::async,
                              [&pipe]
                              {
@@ -183,10 +181,36 @@ TEST(PipelineContracts, ClosingWaitsForReservedWriterBeforeEndOfStream)
                                  return read.value();
                              });
     EXPECT_EQ(reader.wait_for(50ms), std::future_status::timeout);
+    EXPECT_THROW(pipe.close(), takt::PipeUnterminatedSegmentError);
+    EXPECT_TRUE(pipe.closed());
+    EXPECT_EQ(reader.wait_for(50ms), std::future_status::timeout);
     write->value() = 42;
     write->publish();
     write.reset();
     EXPECT_EQ(reader.get(), 42);
+    EXPECT_THROW((void)pipe.acquire_read(), takt::PipeClosedAndEmptySignal);
+}
+
+TEST(PipelineContracts, ClosedUnterminatedShotDrainsPartialWindowWithoutShotEnd)
+{
+    takt::Pipe<int> pipe("partial-unended-tail");
+    configure_pipe(pipe, 3, 0, 3, 0, 1);
+    pipe.initialize();
+    for (int value : {4, 5})
+    {
+        auto write = pipe.acquire_write();
+        write.value() = value;
+        write.publish();
+    }
+
+    EXPECT_THROW(pipe.close(), takt::PipeUnterminatedSegmentError);
+    {
+        auto tail = pipe.acquire_read();
+        EXPECT_EQ(tail.size(), 2U);
+        EXPECT_FALSE(tail.is_segment_end());
+        EXPECT_EQ(tail.value(0), 4);
+        EXPECT_EQ(tail.value(1), 5);
+    }
     EXPECT_THROW((void)pipe.acquire_read(), takt::PipeClosedAndEmptySignal);
 }
 
@@ -197,7 +221,7 @@ TEST(PipelineContracts, MultipleReadTokensRetainTheirOwnConsecutiveSegments)
     pipe.initialize();
     for (int value : {1, 2})
     {
-        auto write = pipe.acquire_write();
+        auto write = pipe.acquire_shot_end_write(1);
         write.value() = value;
         write.publish();
     }
@@ -221,11 +245,11 @@ TEST(PipelineContracts, ErrorClosureDrainsUnterminatedPrefixAndPendingWrites)
     configure_pipe(pipe, 3, 0);
     pipe.initialize();
     {
-        auto write = pipe.acquire_write(false);
+        auto write = pipe.acquire_write();
         write.value() = 1;
         write.publish();
     }
-    std::optional<takt::Pipe<int>::WriteToken> pending(pipe.acquire_write(false));
+    std::optional<takt::Pipe<int>::WriteToken> pending(pipe.acquire_write());
     pipe.close_with_error("upstream failed");
     {
         auto read = pipe.acquire_read();
@@ -254,9 +278,10 @@ TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
     takt::Pipe<int> pipe("gap");
     configure_pipe(pipe, 3, 0);
     pipe.initialize();
-    std::optional<takt::Pipe<int>::WriteToken> first(pipe.acquire_write(false));
-    std::optional<takt::Pipe<int>::WriteToken> failed(pipe.acquire_write(false));
-    std::optional<takt::Pipe<int>::WriteToken> last(pipe.acquire_write(true));
+    std::optional<takt::Pipe<int>::WriteToken> first(pipe.acquire_write());
+    std::optional<takt::Pipe<int>::WriteToken> failed(pipe.acquire_write());
+    std::optional<takt::Pipe<int>::WriteToken> last(
+        pipe.acquire_shot_end_write(1));
     first->value() = 1;
     first->publish();
     last->value() = 3;
@@ -274,15 +299,13 @@ TEST(PipelineContracts, AbandonedMiddleWriteDoesNotPublishLaterFramesAcrossGap)
 
 TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
 {
-    auto input = make_configured_pipe("bridge-in", 1, Frame(16),
-                                      takt::ReadHistoryPolicy::Disabled);
-    auto output = make_configured_pipe("bridge-out", 1, Frame(16),
-                                       takt::ReadHistoryPolicy::Disabled);
+    auto input = make_configured_pipe("bridge-in", 1, Frame(16));
+    auto output = make_configured_pipe("bridge-out", 1, Frame(16));
     input->initialize();
     output->initialize();
     const float* original = nullptr;
     {
-        auto write = input->acquire_write();
+        auto write = input->acquire_shot_end_write(1);
         original = write.value().data();
         write.value()[7] = 42.0F;
         write.publish();
@@ -297,7 +320,7 @@ TEST(PipelineContracts, TypedBridgeTransfersVectorStorageInsteadOfCopyingPixels)
     }
     EXPECT_THROW(source->transfer_to(*source), std::invalid_argument);
     {
-        auto write = input->acquire_write();
+        auto write = input->acquire_shot_end_write(1);
         write.publish();
     }
     auto mismatch =
@@ -329,8 +352,8 @@ TEST(PipelineContracts, TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
     {
         FramePipe input("frames-in");
         FramePipe output("frames-out");
-        configure_pipe(input, 2, Frame(16), takt::ReadHistoryPolicy::Disabled);
-        configure_pipe(output, 2, Frame(16), takt::ReadHistoryPolicy::Disabled);
+        configure_pipe(input, 2, Frame(16));
+        configure_pipe(output, 2, Frame(16));
         input.initialize();
         output.initialize();
         auto node = std::make_shared<FrameNode>(input, output, failure);
@@ -344,7 +367,7 @@ TEST(PipelineContracts, TokenOwnedFramesDrainAndWorkerFailureReachesRuntime)
                                        {
                                            for (int i = 1; i <= 4; ++i)
                                            {
-                                               auto write = input.acquire_write();
+                                               auto write = input.acquire_shot_end_write(1);
                                                write.value()[0] = static_cast<float>(i);
                                                write.publish();
                                            }

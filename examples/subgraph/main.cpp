@@ -44,7 +44,8 @@ class DoubleNode final : public takt::Node
     void process_task(size_t, takt::Node::Task& task) override
     {
         auto& t = static_cast<DoubleTask&>(task);
-        auto w = out_->acquire_write(t.segment_end);
+        auto w = t.segment_end ? out_->acquire_shot_end_write(1)
+                               : out_->acquire_write();
         w.value() = t.value * 2;
         w.publish();
     }
@@ -117,7 +118,7 @@ int main(int argc, char** argv)
 
     for (int i = 1; i <= 4; ++i)
     {
-        auto w = outer_in->acquire_write(true);
+        auto w = outer_in->acquire_shot_end_write(1);
         w.value() = i;
         w.publish();
     }

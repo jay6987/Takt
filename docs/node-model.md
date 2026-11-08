@@ -74,7 +74,9 @@ enqueue the task, and process directly in their baskets. Call `publish()` only
 after successful processing; destruction retires the write and releases the
 read basket. Do not copy the input image or release its read token during task
 construction. Preallocate each pipe's vector template and each worker's scratch,
-and select `ReadHistoryPolicy::Disabled` for non-overlap streams.
+and configure the consumer's window once before initialization. With
+`read_size == 1` and `overlap_size == 0`, `acquire_read()` reads one frame; larger
+windows are returned by the same API as a batch token.
 
 ## Failure and shutdown
 

@@ -74,7 +74,8 @@ class DoubleNode final : public takt::Node
             try
             {
                 auto r = in_->acquire_read();
-                auto w = out_->acquire_write(r.is_segment_end());
+                auto w = r.is_segment_end() ? out_->acquire_shot_end_write(1)
+                                            : out_->acquire_write();
                 w.value() = r.value() * 2;
                 w.publish();
             }
@@ -419,7 +420,7 @@ TEST(PipelineBuilderTests, SubgraphMappingBridgesRuntimeDataFlow)
 
     for (int i = 1; i <= 4; ++i)
     {
-        auto w = outer_in->acquire_write(true);
+        auto w = outer_in->acquire_shot_end_write(1);
         w.value() = i;
         w.publish();
     }
@@ -501,7 +502,7 @@ TEST(PipelineBuilderTests, SubgraphBridgeFailurePropagatesToRuntimeJoin)
     runtime->start();
 
     {
-        auto w = outer_in->acquire_write(true);
+        auto w = outer_in->acquire_shot_end_write(1);
         w.value() = 42;
         w.publish();
     }
@@ -553,7 +554,7 @@ TEST(PipelineBuilderTests, SubgraphLifecycleRequestStopJoinNoDeadlock)
             {
                 try
                 {
-                    auto w = outer_in->acquire_write(true);
+                    auto w = outer_in->acquire_shot_end_write(1);
                     w.value() = v++;
                     w.publish();
                 }

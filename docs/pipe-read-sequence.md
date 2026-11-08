@@ -10,19 +10,18 @@ sequenceDiagram
     participant Pipe as Pipe<T>
     participant Core as PipeCore
 
-    Consumer->>Pipe: acquire_read() or acquire_read_batch(read_size, overlap_size)
-    Pipe->>Pipe: snapshot previous read window (for overlap)
-    Pipe->>Core: acquire_read_batch(read_size, overlap_size, has_prev, prev_size)
+    Consumer->>Pipe: acquire_read()
+    Pipe->>Pipe: read configured read_size / overlap_size
+    Pipe->>Core: acquire_read_window(configured_read_size, configured_overlap)
 
     alt enough readable data within current segment (or closed-and-draining)
-        Core-->>Pipe: token id + slots + stride metadata
-        Pipe-->>Pipe: compose overlap prefix + new slots
-        Pipe-->>Consumer: ReadToken / ReadBatchToken
+        Core-->>Pipe: token id + new slots + window metadata
+        Pipe-->>Pipe: map the full window to retained ring slots
+        Pipe-->>Consumer: ReadToken
         Consumer->>Consumer: process values
         Consumer->>Pipe: token destructs
-        Pipe->>Pipe: persist last_read window
         Pipe->>Core: release_read_batch(token_id)
-        Core-->>Core: advance read_release_pos in token order
+        Core-->>Core: update reusable boundary in token order
         Core-->>Core: notify readers/writers
     else closed and no contiguous readable data
         Core-->>Consumer: throw PipeClosedAndEmptySignal
@@ -32,19 +31,25 @@ sequenceDiagram
 ## Overlap Rules
 
 - `overlap_size` must be smaller than `read_size`.
-- Overlap read requires one previous completed read batch.
-- Overlap prefix is sourced from the previous read window snapshot.
+- `acquire_read()` always uses the configured consumer window.
+- The overlap prefix refers to slots in the previous window that remain in the
+  ring buffer; no payload snapshot is made.
+- Read acquisition reserves successive windows in order. Active tokens pin
+  their slots until release, even if processing completes out of order.
 - Overlap is constrained to the same segment and never crosses a segment boundary.
 
 ## Segment Rules
 
-- Read batches are clipped to the nearest committed segment end.
-- `ReadToken`/`ReadBatchToken` expose `is_segment_start()` and `is_segment_end()`.
+- Read windows are clipped to the nearest committed segment end.
+- `ReadToken` exposes `size()`, `overlap_size()`, `is_segment_start()`, and
+  `is_segment_end()`.
 - Consumers can use segment flags to trigger end-of-shot flushing logic.
 
 ## Notes
 
 - Read visibility is controlled by contiguous committed write order, not by isolated later publishes.
-- Slot release occurs when read token lifetime ends, and free capacity is returned in read-token release order.
+- Active-window slots remain pinned until token destruction, and the trailing
+  configured overlap remains pinned for the next acquisition.
 - If the pipe faulted because of an earlier unpublished write token, readers can only drain the already visible prefix, then receive `PipeClosedAndEmptySignal`.
-- Core remains type-agnostic; overlap value composition is handled by Pipe<T>.
+- Core remains type-agnostic; `Pipe<T>` maps each window position directly to
+  its ring-buffer slot.

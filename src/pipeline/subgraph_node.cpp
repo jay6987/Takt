@@ -150,10 +150,34 @@ void SubgraphNode::request_stop() noexcept
     bridge_stop_requested_.store(true);
     for (const auto& link : mapping_links_)
     {
-        link.source->close();
-        link.target->close();
+        try
+        {
+            link.source->close();
+        }
+        catch (const std::exception& e)
+        {
+            error("pipeline='" + pipeline_name() + "' node='" + name() +
+                  "' failed to close bridge source: " + e.what());
+        }
+        try
+        {
+            link.target->close();
+        }
+        catch (const std::exception& e)
+        {
+            error("pipeline='" + pipeline_name() + "' node='" + name() +
+                  "' failed to close bridge target: " + e.what());
+        }
     }
-    runtime_->request_stop();
+    try
+    {
+        runtime_->request_stop();
+    }
+    catch (const std::exception& e)
+    {
+        error("pipeline='" + pipeline_name() + "' node='" + name() +
+              "' failed to stop inner runtime: " + e.what());
+    }
 }
 
 const std::unordered_map<std::string, NodePortRef>&

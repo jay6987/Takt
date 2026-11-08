@@ -15,7 +15,7 @@ record_pipe.set_capacity(8);
 record_pipe.initialize();
 auto record = takt::recordreplay::make_scoped_record(record_pipe, file_path);
 
-auto w = record_pipe.acquire_write_batch(3, true);
+auto w = record_pipe.acquire_shot_end_write(3);
 w.value(0) = 101;
 w.value(1) = 202;
 w.value(2) = 303;
@@ -34,14 +34,14 @@ replay_pipe.initialize();
 auto replay = takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
 
 {
-    auto seed = replay_pipe.acquire_write_batch(3, true);
+    auto seed = replay_pipe.acquire_shot_end_write(3);
     seed.value(0) = -1;
     seed.value(1) = -1;
     seed.value(2) = -1;
     seed.publish();
 }
 
-auto r = replay_pipe.acquire_read_batch(3, 0);
+auto r = replay_pipe.acquire_read();
 ```
 
 The scoped guard must outlive the record/replay phase, and the pipe must outlive
@@ -83,4 +83,4 @@ If you want to see where `Pipe<int>` record/replay behavior is implemented:
 3. Where record is triggered in pipe write lifecycle:
     - `include/takt/pipeline/pipe.h` in `WriteBatchToken::release()`
 4. Where replay is triggered in pipe read lifecycle:
-    - `include/takt/pipeline/pipe.h` in `Pipe<T>::acquire_read_batch()`
+    - `include/takt/pipeline/pipe.h` in `Pipe<T>::acquire_read()`

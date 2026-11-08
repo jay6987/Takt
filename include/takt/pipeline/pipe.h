@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -12,19 +11,12 @@
 
 namespace takt
 {
-enum class ReadHistoryPolicy
-{
-    Snapshot,
-    Disabled,
-};
-
 template <typename T> class Pipe : public PipeBase
 {
   public:
     class WriteToken;
     class WriteBatchToken;
     class ReadToken;
-    class ReadBatchToken;
 
     explicit Pipe(std::string name) : PipeBase(std::move(name)) {}
 
@@ -51,28 +43,20 @@ template <typename T> class Pipe : public PipeBase
         descriptor_ = std::move(descriptor);
     }
 
-    void set_read_history_policy(ReadHistoryPolicy policy)
-    {
-        require_configuring();
-        history_policy_ = policy;
-    }
-
     void validate_configuration() const override
     {
         validate_common();
         if (!basket_template_)
             fail("producer basket template is missing");
-        if (history_policy_ == ReadHistoryPolicy::Disabled &&
-            consumer_config().overlap_size != 0)
-            throw std::invalid_argument(
-                context("overlap requires Snapshot read history"));
     }
 
     void initialize() override
     {
         validate_configuration();
         const auto count = capacity();
-        auto core = std::make_unique<PipeCore>(name(), count);
+        auto core = std::make_unique<PipeCore>(
+            name(), count, consumer_config().overlap_size,
+            producer_config().write_size);
         std::vector<T> baskets(count, *basket_template_);
         core_ = std::move(core);
         baskets_ = std::move(baskets);
@@ -127,97 +111,44 @@ template <typename T> class Pipe : public PipeBase
 
     WriteToken acquire_write()
     {
-        auto batch = acquire_write_batch(1, true);
-        return WriteToken(std::move(batch));
+        auto token = acquire_write_token(producer_config().write_size, false);
+        return WriteToken(std::move(token));
     }
 
-    WriteToken acquire_write(bool is_segment_end)
+    WriteToken acquire_shot_end_write(size_t count)
     {
-        auto batch = acquire_write_batch(1, is_segment_end);
-        return WriteToken(std::move(batch));
-    }
-
-    WriteBatchToken acquire_write_batch(size_t count, bool is_segment_end)
-    {
-        require_initialized();
-        auto batch = core_->acquire_write_batch(count, is_segment_end);
-        return WriteBatchToken(this, batch.token_id, batch.is_segment_start,
-                               batch.is_segment_end, std::move(batch.slots));
-    }
-
-    WriteBatchToken acquire_configured_write_batch(bool is_segment_end)
-    {
-        return acquire_write_batch(producer_config().write_size, is_segment_end);
-    }
-
-    ReadBatchToken acquire_configured_read_batch()
-    {
-        const auto& config = consumer_config();
-        return acquire_read_batch(config.read_size, config.overlap_size);
+        auto token = acquire_write_token(count, true);
+        return WriteToken(std::move(token));
     }
 
     ReadToken acquire_read()
     {
-        auto batch = acquire_read_batch(1, 0);
-        return ReadToken(std::move(batch));
-    }
-
-    ReadToken acquire_mutable_read()
-    {
-        return acquire_read();
-    }
-
-    ReadBatchToken acquire_read_batch(size_t read_size, size_t overlap_size = 0)
-    {
         require_initialized();
-        if (overlap_size > 0 && history_policy_ == ReadHistoryPolicy::Disabled)
-        {
-            throw std::invalid_argument("overlap requires Snapshot read history");
-        }
-        std::vector<T> last_read_snapshot;
-        bool has_previous_read = false;
-        size_t previous_read_size = 0;
-        {
-            std::lock_guard<std::mutex> lk(read_history_mutex_);
-            has_previous_read = last_read_initialized_;
-            previous_read_size = last_read_values_.size();
-            if (overlap_size > 0 && has_previous_read)
-            {
-                last_read_snapshot = last_read_values_;
-            }
-        }
-
-        auto core_batch = core_->acquire_read_batch(
-            read_size, overlap_size, has_previous_read, previous_read_size);
+        const auto& config = consumer_config();
+        auto core_batch =
+            core_->acquire_read_window(config.read_size, config.overlap_size);
 
         try
         {
             recordreplay::detail::RecordReplayRegistry::instance().replay_slots(
                 *this, core_batch.slots, baskets_);
+
+            std::vector<size_t> slots;
+            slots.reserve(core_batch.read_size);
+            for (size_t i = 0; i < core_batch.read_size; ++i)
+            {
+                slots.push_back((core_batch.start_pos + i) % capacity());
+            }
+
+            return ReadToken(this, core_batch.token_id, core_batch.is_segment_start,
+                             core_batch.is_segment_end, std::move(slots),
+                             core_batch.overlap_size, core_batch.read_size);
         }
         catch (...)
         {
             core_->release_read_batch(core_batch.token_id);
             throw;
         }
-
-        std::vector<T> overlap_values;
-        overlap_values.reserve(core_batch.overlap_size);
-        for (size_t i = last_read_snapshot.size() - core_batch.overlap_size;
-             i < last_read_snapshot.size(); ++i)
-        {
-            overlap_values.push_back(last_read_snapshot[i]);
-        }
-
-        return ReadBatchToken(this, core_batch.token_id, core_batch.is_segment_start,
-                              core_batch.is_segment_end, std::move(core_batch.slots),
-                              std::move(overlap_values), core_batch.overlap_size,
-                              core_batch.read_size);
-    }
-
-    ReadBatchToken acquire_mutable_read_batch(size_t read_size, size_t overlap_size = 0)
-    {
-        return acquire_read_batch(read_size, overlap_size);
     }
 
     class WriteToken
@@ -244,13 +175,36 @@ template <typename T> class Pipe : public PipeBase
 
         ~WriteToken() = default;
 
+        size_t size() const noexcept
+        {
+            return batch_.size();
+        }
+
         T& value()
         {
+            if (size() != 1)
+            {
+                throw std::logic_error(
+                    "write token contains multiple values; use value(index)");
+            }
             return batch_.value(0);
         }
         const T& value() const
         {
+            if (size() != 1)
+            {
+                throw std::logic_error(
+                    "write token contains multiple values; use value(index)");
+            }
             return batch_.value(0);
+        }
+        T& value(size_t index)
+        {
+            return batch_.value(index);
+        }
+        const T& value(size_t index) const
+        {
+            return batch_.value(index);
         }
 
         void publish() noexcept
@@ -390,62 +344,16 @@ template <typename T> class Pipe : public PipeBase
       public:
         ReadToken() = default;
 
-        explicit ReadToken(ReadBatchToken&& batch) : batch_(std::move(batch)) {}
-
-        ReadToken(ReadToken&& rhs) noexcept : batch_(std::move(rhs.batch_)) {}
-
-        ReadToken& operator=(ReadToken&& rhs) noexcept
-        {
-            if (this == &rhs)
-            {
-                return *this;
-            }
-            batch_ = std::move(rhs.batch_);
-            return *this;
-        }
-
-        ReadToken(const ReadToken&) = delete;
-        ReadToken& operator=(const ReadToken&) = delete;
-
-        ~ReadToken() = default;
-
-        const T& value() const
-        {
-            return batch_.value(0);
-        }
-        T& mutable_value()
-        {
-            return batch_.mutable_value(0);
-        }
-        bool is_segment_start() const noexcept
-        {
-            return batch_.is_segment_start();
-        }
-        bool is_segment_end() const noexcept
-        {
-            return batch_.is_segment_end();
-        }
-
-      private:
-        ReadBatchToken batch_;
-    };
-
-    class ReadBatchToken
-    {
-      public:
-        ReadBatchToken() = default;
-
-        ReadBatchToken(ReadBatchToken&& rhs) noexcept
+        ReadToken(ReadToken&& rhs) noexcept
             : owner_(rhs.owner_), token_id_(rhs.token_id_),
               is_segment_start_(rhs.is_segment_start_),
               is_segment_end_(rhs.is_segment_end_), slots_(std::move(rhs.slots_)),
-              overlap_values_(std::move(rhs.overlap_values_)),
               overlap_size_(rhs.overlap_size_), read_size_(rhs.read_size_)
         {
             rhs.owner_ = nullptr;
         }
 
-        ReadBatchToken& operator=(ReadBatchToken&& rhs) noexcept
+        ReadToken& operator=(ReadToken&& rhs) noexcept
         {
             if (this == &rhs)
             {
@@ -457,17 +365,16 @@ template <typename T> class Pipe : public PipeBase
             is_segment_start_ = rhs.is_segment_start_;
             is_segment_end_ = rhs.is_segment_end_;
             slots_ = std::move(rhs.slots_);
-            overlap_values_ = std::move(rhs.overlap_values_);
             overlap_size_ = rhs.overlap_size_;
             read_size_ = rhs.read_size_;
             rhs.owner_ = nullptr;
             return *this;
         }
 
-        ReadBatchToken(const ReadBatchToken&) = delete;
-        ReadBatchToken& operator=(const ReadBatchToken&) = delete;
+        ReadToken(const ReadToken&) = delete;
+        ReadToken& operator=(const ReadToken&) = delete;
 
-        ~ReadBatchToken()
+        ~ReadToken()
         {
             release();
         }
@@ -493,38 +400,48 @@ template <typename T> class Pipe : public PipeBase
         {
             if (index >= read_size_)
             {
-                throw std::out_of_range("read batch index out of range");
+                throw std::out_of_range("read token index out of range");
             }
-            if (index < overlap_size_)
-            {
-                return overlap_values_[index];
-            }
-            return owner_->baskets_[slots_[index - overlap_size_]];
+            return owner_->baskets_[slots_[index]];
         }
 
         const T& value(size_t index) const
         {
             if (index >= read_size_)
             {
-                throw std::out_of_range("read batch index out of range");
+                throw std::out_of_range("read token index out of range");
             }
-            if (index < overlap_size_)
+            return owner_->baskets_[slots_[index]];
+        }
+
+        T& mutable_value()
+        {
+            if (read_size_ != 1)
             {
-                return overlap_values_[index];
+                throw std::logic_error(
+                    "read token contains multiple values; use mutable_value(index)");
             }
-            return owner_->baskets_[slots_[index - overlap_size_]];
+            return mutable_value(0);
+        }
+
+        const T& value() const
+        {
+            if (read_size_ != 1)
+            {
+                throw std::logic_error(
+                    "read token contains multiple values; use value(index)");
+            }
+            return value(0);
         }
 
       private:
         friend class Pipe<T>;
-        ReadBatchToken(Pipe<T>* owner, size_t token_id, bool is_segment_start,
-                       bool is_segment_end, std::vector<size_t>&& slots,
-                       std::vector<T>&& overlap_values, size_t overlap_size,
-                       size_t read_size)
+        ReadToken(Pipe<T>* owner, size_t token_id, bool is_segment_start,
+                  bool is_segment_end, std::vector<size_t>&& slots,
+                  size_t overlap_size, size_t read_size)
             : owner_(owner), token_id_(token_id), is_segment_start_(is_segment_start),
               is_segment_end_(is_segment_end), slots_(std::move(slots)),
-              overlap_values_(std::move(overlap_values)), overlap_size_(overlap_size),
-              read_size_(read_size)
+              overlap_size_(overlap_size), read_size_(read_size)
         {
         }
 
@@ -534,8 +451,7 @@ template <typename T> class Pipe : public PipeBase
             {
                 return;
             }
-            owner_->release_read_batch(token_id_, slots_, overlap_values_, read_size_,
-                                       overlap_size_);
+            owner_->release_read_batch(token_id_);
             owner_ = nullptr;
         }
 
@@ -544,45 +460,26 @@ template <typename T> class Pipe : public PipeBase
         bool is_segment_start_ = false;
         bool is_segment_end_ = false;
         std::vector<size_t> slots_;
-        std::vector<T> overlap_values_;
         size_t overlap_size_ = 0;
         size_t read_size_ = 0;
     };
 
   private:
+    WriteBatchToken acquire_write_token(size_t count, bool is_segment_end)
+    {
+        require_initialized();
+        auto batch = core_->acquire_write_batch(count, is_segment_end);
+        return WriteBatchToken(this, batch.token_id, batch.is_segment_start,
+                               batch.is_segment_end, std::move(batch.slots));
+    }
+
     void release_write_batch(size_t token_id, bool published)
     {
         core_->release_write_batch(token_id, published);
     }
 
-    void release_read_batch(size_t token_id, const std::vector<size_t>& slots,
-                            const std::vector<T>& overlap_values, size_t read_size,
-                            size_t overlap_size)
+    void release_read_batch(size_t token_id)
     {
-        if (history_policy_ == ReadHistoryPolicy::Disabled)
-        {
-            core_->release_read_batch(token_id);
-            return;
-        }
-        std::vector<T> current_read_values;
-        current_read_values.reserve(read_size);
-        for (size_t i = 0; i < read_size; ++i)
-        {
-            if (i < overlap_size)
-            {
-                current_read_values.push_back(overlap_values[i]);
-            }
-            else
-            {
-                current_read_values.push_back(baskets_[slots[i - overlap_size]]);
-            }
-        }
-        {
-            std::lock_guard<std::mutex> lk(read_history_mutex_);
-            last_read_values_ = std::move(current_read_values);
-            last_read_initialized_ = true;
-        }
-
         core_->release_read_batch(token_id);
     }
 
@@ -590,10 +487,6 @@ template <typename T> class Pipe : public PipeBase
     std::unique_ptr<T> basket_template_;
     std::vector<T> baskets_;
     PipeDescriptor descriptor_;
-    ReadHistoryPolicy history_policy_ = ReadHistoryPolicy::Snapshot;
     std::string configuration_error_;
-    mutable std::mutex read_history_mutex_;
-    std::vector<T> last_read_values_;
-    bool last_read_initialized_ = false;
 };
 } // namespace takt

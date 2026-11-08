@@ -67,9 +67,10 @@ remains safe; a failed runtime preserves its original failure.
 
 ## Write Side
 
-- `acquire_write(is_segment_end)` acquires one basket and marks whether this token ends a segment.
-- `acquire_write_batch(count, is_segment_end)` acquires contiguous logical write work in one token.
-- `acquire_configured_write_batch(is_segment_end)` uses the producer's `write_size`.
+- `acquire_write()` reserves the configured `write_size` and does not end the Shot.
+- `acquire_shot_end_write(count)` reserves 1 through `write_size` slots and
+  explicitly ends the Shot.
+- Acquiring a count above `write_size` or available capacity throws instead of waiting forever.
 - `publish()` marks the token as committed, but read visibility still follows acquire order.
 - A later published token does not become visible until all earlier write tokens are released and published.
 - A published write token that remains alive still holds capacity and does not complete visibility progression until it is released.
@@ -77,22 +78,31 @@ remains safe; a failed runtime preserves its original failure.
 - Once faulted, future write acquisition throws `PipeFaultedError`.
 - Fault status can be queried with `faulted()` and `fault_message()`.
 - Write tokens expose `is_segment_start()` and `is_segment_end()` metadata.
+- `close()` closes the pipe and wakes waiters before reporting an unfinished Shot
+  with `PipeUnterminatedSegmentError`. It does not create a ShotEnd. Published
+  data from the unfinished Shot remains drainable; its last read window is not
+  marked as a segment end, then readers receive `PipeClosedAndEmptySignal`.
 
 ## Read Side
 
-- `acquire_read()` acquires one readable element.
-- `acquire_read_batch(read_size, overlap_size)` supports sliding-window style consumption.
-- `acquire_configured_read_batch()` uses the consumer's configured window/overlap.
+- `acquire_read()` uses the configured consumer window and returns a move-only
+  read token.
+- Use `value(index)` / `mutable_value(index)` for windows; indexless access is
+  valid only when the returned window has one value.
 - `overlap_size < read_size` must hold.
-- Overlap reads require one previous completed read batch.
-- Read windows are bounded by committed segment ends and do not cross segments.
+- The window advances by `read_size - overlap_size`.
+- During an open Shot, a window becomes readable once its full stride of newly
+  published slots is available; it does not wait for ShotEnd.
+- Read windows are bounded by committed segment ends and do not cross segments;
+  ShotEnd may return a shorter final window.
 - Read tokens expose `is_segment_start()` and `is_segment_end()` metadata.
 - Multiple active read tokens reserve successive segments without releasing
-  earlier baskets. A basket cannot be reused until its read token is destroyed.
-- `ReadHistoryPolicy::Snapshot` is the backward-compatible default and copies
-  completed read payloads to support overlap. Use `ReadHistoryPolicy::Disabled`
-  for ordinary frame pipelines: release does not copy payloads, and overlap
-  requests fail explicitly.
+  earlier baskets. Active tokens pin their slots until destroyed.
+- Overlap slots stay in the ring buffer until they are no longer needed. The
+  first read in each segment has zero overlap; overlap never crosses a segment
+  end.
+- Overlapping tokens can reference the same ring slots. Treat overlap values as
+  read-only while another active token may be using them.
 - Nontrivial payloads such as `std::vector<float>` need no codec for ordinary
   operation. A codec is required only when record/replay is bound.
 

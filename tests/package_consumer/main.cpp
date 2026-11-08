@@ -21,12 +21,12 @@ int main()
     runtime.initialize();
     runtime.start();
     {
-        auto write = pipe->acquire_configured_write_batch(true);
+        auto write = pipe->acquire_shot_end_write(1);
         write.value(0) = 42;
         write.publish();
     }
 
-    auto read = pipe->acquire_configured_read_batch();
+    auto read = pipe->acquire_read();
     runtime.join();
     return read.value(0) == 42 ? 0 : 1;
 }

@@ -16,7 +16,7 @@ and cancellation phases live outside this diagram; see [Pipe Lifecycle](pipe-lif
 
 1. Open-Active
 - closed is false
-- producers can acquire write batches if free slots exist
+- producers can reserve the configured write size or an explicit count if free slots exist
 - consumers can acquire read batches if readable data exists
 
 2. Open-WriterBlocked
@@ -79,8 +79,8 @@ stateDiagram-v2
 
 ## Mapping To Public API
 
-- Pipe acquire_write and acquire_write_batch reserve capacity through PipeCore
+- Pipe acquire_write reserves the configured write size or an explicit count through PipeCore
 - Pipe publish marks reserved writes as committed; visibility advances only through contiguous release order
-- Pipe acquire_read and acquire_read_batch consume readable data through PipeCore
+- Pipe acquire_read consumes the configured read window through PipeCore
 - Initialized Pipe close forwards to PipeCore close; configuration-time close
   cancels preparation without constructing a core.

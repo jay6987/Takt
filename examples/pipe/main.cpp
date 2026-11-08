@@ -15,7 +15,7 @@ int main()
 
     for (int i = 1; i <= 5; ++i)
     {
-        auto w = numbers.acquire_write(true);
+        auto w = numbers.acquire_shot_end_write(1);
         w.value() = i;
         w.publish();
     }

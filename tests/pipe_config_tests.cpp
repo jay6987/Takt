@@ -70,12 +70,12 @@ TEST(PipeConfigTests, DefaultConstructionAndNameOnlyRetainDefaults)
     EXPECT_EQ(pipe.capacity(), 1U);
     pipe.initialize();
     {
-        auto write = pipe.acquire_configured_write_batch(true);
+        auto write = pipe.acquire_shot_end_write(1);
         EXPECT_EQ(write.size(), 1U);
         write.value(0) = 42;
         write.publish();
     }
-    auto read = pipe.acquire_configured_read_batch();
+    auto read = pipe.acquire_read();
     EXPECT_EQ(read.size(), 1U);
     EXPECT_EQ(read.overlap_size(), 0U);
     EXPECT_EQ(read.value(0), 42);

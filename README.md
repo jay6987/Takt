@@ -108,19 +108,28 @@ registry. Stop and join running nodes before releasing their dependencies.
   same object, then initialize. Names are labels and do not share connections.
 - `PipelineRuntime::initialize()` prepares bound endpoint pipes and nested
   runtimes; call it before `start()`. Direct runtimes can receive explicit pipes.
-- Single element: `acquire_write(is_segment_end)` / `acquire_read()`.
-- Batch element: `acquire_write_batch(count, is_segment_end)` / `acquire_read_batch(read_size, overlap_size)`.
-- Configured batch: `acquire_configured_write_batch(is_segment_end)` /
-  `acquire_configured_read_batch()`. Scalar APIs never adopt batch defaults.
+- Single-element or batch reads use `acquire_read()`, which follows the
+  consumer's configured `read_size` and `overlap_size`.
+- `acquire_write()` reserves the configured `write_size` without ending the
+  Shot; `acquire_shot_end_write(count)` reserves up to `write_size` and
+  explicitly ends the Shot.
+- Closing an unfinished Shot closes and wakes the pipe before throwing
+  `PipeUnterminatedSegmentError`; it never fabricates a ShotEnd.
 - Write/read tokens expose `is_segment_start()` and `is_segment_end()` metadata.
 - Read batches are segment-bounded and never cross committed segment ends.
 - `PipeClosedAndEmptySignal` is used for graceful pipeline termination.
 
-### Breaking lifecycle migration
+### Breaking lifecycle and read API migration
 
 `PipeBuilder` and constructors taking capacity/template are removed, not
 deprecated compatibility wrappers. This applies equally to checkout and
 installed-package consumers:
+
+`acquire_read()` now always returns the window declared by `ConsumerConfig`.
+The former scalar-only, per-call batch, configured-batch, and mutable-read
+entry points are removed; use `ReadToken::size()` and `value(index)` to access
+the configured window. Overlap is retained in ring slots, so
+`ReadHistoryPolicy` and `set_read_history_policy()` are also removed.
 
 ```cpp
 auto frames = std::make_shared<takt::Pipe<std::vector<float>>>("frames");
@@ -129,7 +138,6 @@ frames->set_producer(
 frames->set_consumer(
     {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
 frames->set_capacity(2); // optional positive override, no concurrency lower bound
-frames->set_read_history_policy(takt::ReadHistoryPolicy::Disabled);
 frames->initialize(); // standalone; a bound runtime can prepare it instead
 ```
 

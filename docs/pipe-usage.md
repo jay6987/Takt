@@ -14,7 +14,7 @@ numbers.initialize();
 
 for (int i = 1; i <= 5; ++i)
 {
-    auto w = numbers.acquire_write(true);
+    auto w = numbers.acquire_shot_end_write(1);
     w.value() = i;
     w.publish();
 }
@@ -43,11 +43,13 @@ while (true)
   serially, not concurrently with initialization or workers.
 - `ProducerConfig` fields are `name`, `concurrency`, `write_size`;
   `ConsumerConfig` fields are `name`, `concurrency`, `read_size`, `overlap_size`.
-- Optional `set_descriptor()` and `set_read_history_policy()` also belong to
-  configuration. After initialization, all configuration is frozen.
+- Optional `set_descriptor()` also belongs to configuration. After
+  initialization, all configuration is frozen.
 - A standalone pipe must be explicitly initialized before any token acquisition.
 - Always call `publish()` on write tokens that should become visible.
-- Call `close()` when no more data will be written.
+- Call `close()` when no more data will be written. If the Shot is unfinished,
+  `close()` closes and wakes the pipe before throwing
+  `PipeUnterminatedSegmentError`; it does not fabricate a ShotEnd.
 - Consumer loops should exit on `PipeClosedAndEmptySignal`.
 
 ## Named Configuration Arguments
@@ -92,9 +94,9 @@ numbers.set_consumer({"sink", takt::concurrency(3), takt::frames_per_read(5)});
 ```
 
 These are alternatives, not repeated calls: each endpoint can be configured only once.
-The per-call acquisition APIs below still accept ordinary integer counts.
+Read acquisition always uses the configured consumer window.
 
-## Capacity and Batch Defaults
+## Capacity and Write Size
 
 Without `set_capacity()`, capacity is `max(W, R)`, where
 `W = producer.concurrency * producer.write_size` and
@@ -104,28 +106,46 @@ repeated requests cannot undo a previous request. These calculations reject
 overflow. Concurrency declares capacity demand, not runtime thread permits.
 
 An explicit positive capacity overrides both policies, even when smaller than
-either side's concurrency or configured batch. The explicit path does not
-calculate unused concurrency demand. Acquiring an impossible batch throws
-instead of waiting forever; initialization itself accepts that capacity.
+either side's concurrency or configured write/read size. The explicit path does
+not calculate unused concurrency demand. Acquiring more slots than capacity
+throws instead of waiting forever; initialization itself accepts that capacity.
 
-The acquisition APIs deliberately remain distinct:
+`ProducerConfig::write_size` is both the default token size and maximum explicit
+token size:
 
 ```cpp
-// Always one element, independent of configured batch defaults:
-auto scalar = numbers.acquire_write(true);
-// Defaults from ProducerConfig / ConsumerConfig; returns batch tokens:
-auto writes = numbers.acquire_configured_write_batch(true);
-auto reads = numbers.acquire_configured_read_batch();
-// Per-call override, still returns batch tokens:
-auto explicit_writes = numbers.acquire_write_batch(2, true);
-auto explicit_reads = numbers.acquire_read_batch(2, 0);
+// Reserves write_size slots and does not end the Shot:
+auto writes = numbers.acquire_write();
+// Reserves 1..write_size slots and explicitly ends the Shot:
+auto final_writes = numbers.acquire_shot_end_write(2);
 ```
 
-These are alternative calls, not a sequence to run while retaining all tokens.
-Overlap is composed from completed read history and never crosses a segment.
-When configured overlap is nonzero, bootstrap history with an explicit
-`acquire_read_batch(read_size, 0)` before using configured reads.
-`ReadHistoryPolicy::Disabled` with configured overlap is rejected at initialization.
+Use `acquire_shot_end_write(count)` for a final full or partial token. A
+no-argument write is never a ShotEnd, including when it reserves one slot.
+
+Read acquisition has one entry point and uses `ConsumerConfig::read_size` and
+`overlap_size`:
+
+```cpp
+auto reads = numbers.acquire_read();
+for (size_t i = 0; i < reads.size(); ++i)
+    consume(reads.value(i));
+```
+
+Each read advances by `read_size - overlap_size`. During an open Shot, a window
+becomes readable as soon as its full stride of newly published slots is
+available; it does not wait for ShotEnd. A committed ShotEnd bounds the window
+and may return a shorter final window. Overlap values are retained in the ring
+buffer; they are not copied into a separate history snapshot. The first window
+in each segment has no overlap, and a segment end resets overlap so the next
+segment never includes frames from the previous segment. Active read tokens pin
+their slots until destruction, so tokens may be processed concurrently after
+being acquired in order. The configured overlap also determines the capacity
+retained behind the read cursor.
+
+After an unfinished Shot is closed, its published slots remain readable. The
+final partial read window has `is_segment_end() == false`; once drained, readers
+receive the usual `PipeClosedAndEmptySignal`.
 
 ## Runtime Preparation
 

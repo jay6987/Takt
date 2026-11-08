@@ -42,7 +42,8 @@ class Relay final : public takt::NodeBase
                 while (true)
                 {
                     auto read = input_->acquire_read();
-                    auto write = output_->acquire_write(read.is_segment_end());
+                    auto write = read.is_segment_end() ? output_->acquire_shot_end_write(1)
+                                                       : output_->acquire_write();
                     write.value() = read.value() * 2;
                     write.publish();
                 }
@@ -234,7 +235,7 @@ TEST(SubgraphDirect, AllDirectAndMixedMappingsTransferOrderedFrames)
             {
                 for (int frame = 0; frame < 16; ++frame)
                 {
-                    auto write = input->acquire_write();
+                    auto write = input->acquire_shot_end_write(1);
                     write.value() = frame;
                     write.publish();
                 }
@@ -305,7 +306,7 @@ TEST(SubgraphDirect, EmptyInputAndFaultedPrefixPropagateWithoutBridge)
         runtime->initialize();
         if (fault)
         {
-            auto write = input->acquire_write(false);
+            auto write = input->acquire_write();
             write.value() = 21;
             write.publish();
         }
@@ -420,7 +421,7 @@ TEST(SubgraphDirect, StopReleasesBlockedProducerAndConsumer)
                 if (write_frames)
                     for (int frame = 0; frame < 64; ++frame)
                     {
-                        auto write = input->acquire_write();
+                        auto write = input->acquire_shot_end_write(1);
                         write.value() = frame;
                         write.publish();
                     }

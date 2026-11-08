@@ -75,7 +75,7 @@ TEST(PipeTests, SingleElementReadWrite)
     configure_pipe(pipe, 2, 0);
     pipe.initialize();
     {
-        auto wt = pipe.acquire_write(true);
+        auto wt = pipe.acquire_shot_end_write(1);
         wt.value() = 42;
         wt.publish();
     }
@@ -89,10 +89,10 @@ TEST(PipeTests, SingleElementReadWrite)
 TEST(PipeTests, BatchReadWrite)
 {
     takt::Pipe<int> batch_pipe("batch");
-    configure_pipe(batch_pipe, 8, 0);
+    configure_pipe(batch_pipe, 8, 0, 4, 0, 4);
     batch_pipe.initialize();
     {
-        auto wb = batch_pipe.acquire_write_batch(4, true);
+        auto wb = batch_pipe.acquire_shot_end_write(4);
         wb.value(0) = 10;
         wb.value(1) = 20;
         wb.value(2) = 30;
@@ -100,7 +100,7 @@ TEST(PipeTests, BatchReadWrite)
         wb.publish();
     }
     {
-        auto rb = batch_pipe.acquire_read_batch(4, 0);
+        auto rb = batch_pipe.acquire_read();
         EXPECT_EQ(rb.size(), 4U);
         EXPECT_EQ(rb.value(0), 10);
         EXPECT_EQ(rb.value(3), 40);
@@ -114,18 +114,18 @@ TEST(PipeTests, MutableReadTokenSingleElementInplace)
     configure_pipe(pipe, 4, 0);
     pipe.initialize();
     {
-        auto w = pipe.acquire_write(true);
+        auto w = pipe.acquire_shot_end_write(1);
         w.value() = 11;
         w.publish();
     }
 
     {
-        auto r = pipe.acquire_mutable_read();
+        auto r = pipe.acquire_read();
         r.mutable_value() *= 3;
     }
 
     {
-        auto w = pipe.acquire_write(true);
+        auto w = pipe.acquire_shot_end_write(1);
         w.value() = 7;
         w.publish();
     }
@@ -137,13 +137,13 @@ TEST(PipeTests, MutableReadTokenSingleElementInplace)
     pipe.close();
 }
 
-TEST(PipeTests, MutableReadTokenBatchInplace)
+TEST(PipeTests, MutableReadTokenBatchInplaceBeforeShotEnd)
 {
     takt::Pipe<int> pipe("mutable-batch");
-    configure_pipe(pipe, 8, 0);
+    configure_pipe(pipe, 8, 0, 4, 0, 4);
     pipe.initialize();
     {
-        auto w = pipe.acquire_write_batch(4, true);
+        auto w = pipe.acquire_write();
         w.value(0) = 1;
         w.value(1) = 2;
         w.value(2) = 3;
@@ -152,7 +152,8 @@ TEST(PipeTests, MutableReadTokenBatchInplace)
     }
 
     {
-        auto r = pipe.acquire_mutable_read_batch(4, 0);
+        auto r = pipe.acquire_read();
+        EXPECT_FALSE(r.is_segment_end());
         for (size_t i = 0; i < r.size(); ++i)
         {
             r.mutable_value(i) += 10;
@@ -160,14 +161,14 @@ TEST(PipeTests, MutableReadTokenBatchInplace)
     }
 
     {
-        auto w = pipe.acquire_write_batch(2, true);
+        auto w = pipe.acquire_shot_end_write(2);
         w.value(0) = 9;
         w.value(1) = 8;
         w.publish();
     }
 
     {
-        auto r = pipe.acquire_read_batch(2, 0);
+        auto r = pipe.acquire_read();
         EXPECT_EQ(r.value(0), 9);
         EXPECT_EQ(r.value(1), 8);
     }
@@ -177,47 +178,95 @@ TEST(PipeTests, MutableReadTokenBatchInplace)
 TEST(PipeTests, OverlapRead)
 {
     takt::Pipe<int> batch_pipe("batch-overlap");
-    configure_pipe(batch_pipe, 8, 0);
+    configure_pipe(batch_pipe, 8, 0, 4, 2, 4);
     batch_pipe.initialize();
     {
-        auto wb = batch_pipe.acquire_write_batch(6, true);
-        for (size_t i = 0; i < 6; ++i)
+        auto first_write = batch_pipe.acquire_write();
+        for (size_t i = 0; i < first_write.size(); ++i)
         {
-            wb.value(i) = static_cast<int>(i + 1); // 1..6
+            first_write.value(i) = static_cast<int>(i + 1); // 1..4
         }
-        wb.publish();
+        first_write.publish();
     }
     {
-        auto first = batch_pipe.acquire_read_batch(4, 0); // 1,2,3,4
-        EXPECT_EQ(first.value(0), 1);
-        EXPECT_EQ(first.value(3), 4);
+        auto last_write = batch_pipe.acquire_shot_end_write(2);
+        last_write.value(0) = 5;
+        last_write.value(1) = 6;
+        last_write.publish();
     }
-    {
-        auto second = batch_pipe.acquire_read_batch(4, 2); // 3,4,5,6
-        EXPECT_EQ(second.overlap_size(), 2U);
-        EXPECT_EQ(second.value(0), 3);
-        EXPECT_EQ(second.value(1), 4);
-        EXPECT_EQ(second.value(2), 5);
-        EXPECT_EQ(second.value(3), 6);
-    }
+    auto first = batch_pipe.acquire_read(); // 1,2,3,4
+    EXPECT_EQ(first.value(0), 1);
+    EXPECT_EQ(first.value(3), 4);
+    auto second = batch_pipe.acquire_read(); // 3,4,5,6
+    EXPECT_EQ(second.overlap_size(), 2U);
+    EXPECT_EQ(second.value(0), 3);
+    EXPECT_EQ(second.value(1), 4);
+    EXPECT_EQ(second.value(2), 5);
+    EXPECT_EQ(second.value(3), 6);
+    EXPECT_EQ(&first.value(2), &second.value(0));
+    EXPECT_EQ(&first.value(3), &second.value(1));
     batch_pipe.close();
+}
+
+TEST(PipeTests, ActiveReadTokensPinSlotsUntilReleased)
+{
+    takt::Pipe<int> pipe("overlap-token-pinning");
+    configure_pipe(pipe, 3, 0, 2, 1, 2);
+    pipe.initialize();
+    {
+        auto write = pipe.acquire_write();
+        write.value(0) = 1;
+        write.value(1) = 2;
+        write.publish();
+    }
+    {
+        auto write = pipe.acquire_shot_end_write(1);
+        write.value() = 3;
+        write.publish();
+    }
+
+    auto first = pipe.acquire_read();
+    auto second = pipe.acquire_read();
+    ASSERT_EQ(second.overlap_size(), 1U);
+    EXPECT_EQ(&first.value(1), &second.value(0));
+
+    auto writer = std::async(std::launch::async, [&pipe]
+                             {
+                                 auto write = pipe.acquire_shot_end_write(1);
+                                 write.value() = 4;
+                                 write.publish();
+                             });
+    EXPECT_EQ(writer.wait_for(std::chrono::milliseconds(50)),
+              std::future_status::timeout);
+
+    first = {};
+    EXPECT_EQ(writer.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    writer.get();
+    EXPECT_EQ(second.value(0), 2);
+    EXPECT_EQ(second.value(1), 3);
+
+    pipe.close();
+    auto third = pipe.acquire_read();
+    ASSERT_EQ(third.size(), 1U);
+    EXPECT_EQ(third.overlap_size(), 0U);
+    EXPECT_EQ(third.value(), 4);
 }
 
 TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
 {
     takt::Pipe<int> pipe("segment");
-    configure_pipe(pipe, 16, 0);
+    configure_pipe(pipe, 16, 0, 8, 2, 4);
     pipe.initialize();
 
     {
-        auto w1 = pipe.acquire_write_batch(3, true);
+        auto w1 = pipe.acquire_shot_end_write(3);
         w1.value(0) = 1;
         w1.value(1) = 2;
         w1.value(2) = 3;
         w1.publish();
     }
     {
-        auto w2 = pipe.acquire_write_batch(4, true);
+        auto w2 = pipe.acquire_shot_end_write(4);
         w2.value(0) = 10;
         w2.value(1) = 11;
         w2.value(2) = 12;
@@ -226,18 +275,20 @@ TEST(PipeTests, SegmentEndPreventsCrossSegmentRead)
     }
 
     {
-        auto r1 = pipe.acquire_read_batch(8, 0);
+        auto r1 = pipe.acquire_read();
         EXPECT_TRUE(r1.is_segment_start());
         EXPECT_TRUE(r1.is_segment_end());
         EXPECT_EQ(r1.size(), 3U);
+        EXPECT_EQ(r1.overlap_size(), 0U);
         EXPECT_EQ(r1.value(0), 1);
         EXPECT_EQ(r1.value(2), 3);
     }
     {
-        auto r2 = pipe.acquire_read_batch(8, 0);
+        auto r2 = pipe.acquire_read();
         EXPECT_TRUE(r2.is_segment_start());
         EXPECT_TRUE(r2.is_segment_end());
         EXPECT_EQ(r2.size(), 4U);
+        EXPECT_EQ(r2.overlap_size(), 0U);
         EXPECT_EQ(r2.value(0), 10);
         EXPECT_EQ(r2.value(3), 13);
     }
@@ -251,23 +302,62 @@ TEST(PipeTests, SegmentFlagsOnWriteTokens)
     configure_pipe(pipe, 8, 0);
     pipe.initialize();
 
-    auto w1 = pipe.acquire_write(false);
+    auto w1 = pipe.acquire_write();
     EXPECT_TRUE(w1.is_segment_start());
     EXPECT_FALSE(w1.is_segment_end());
     w1.value() = 1;
     w1.publish();
 
-    auto w2 = pipe.acquire_write(true);
+    auto w2 = pipe.acquire_shot_end_write(1);
     EXPECT_FALSE(w2.is_segment_start());
     EXPECT_TRUE(w2.is_segment_end());
     w2.value() = 2;
     w2.publish();
 
-    auto w3 = pipe.acquire_write(true);
+    auto w3 = pipe.acquire_shot_end_write(1);
     EXPECT_TRUE(w3.is_segment_start());
     EXPECT_TRUE(w3.is_segment_end());
     w3.value() = 3;
     w3.publish();
+}
+
+TEST(PipeTests, ShotEndWriteUsesConfiguredSizeAndEndsSegment)
+{
+    takt::Pipe<int> pipe("write-size-contract");
+    configure_pipe(pipe, 4, 0, 2, 0, 2);
+    pipe.initialize();
+
+    {
+        auto write = pipe.acquire_write();
+        EXPECT_EQ(write.size(), 2U);
+        EXPECT_FALSE(write.is_segment_end());
+        write.value(0) = 10;
+        write.value(1) = 11;
+        write.publish();
+    }
+    {
+        auto write = pipe.acquire_shot_end_write(1);
+        EXPECT_EQ(write.size(), 1U);
+        EXPECT_TRUE(write.is_segment_end());
+        write.value() = 12;
+        write.publish();
+    }
+    EXPECT_THROW(pipe.acquire_shot_end_write(3), std::invalid_argument);
+
+    {
+        auto read = pipe.acquire_read();
+        EXPECT_EQ(read.size(), 2U);
+        EXPECT_FALSE(read.is_segment_end());
+        EXPECT_EQ(read.value(0), 10);
+        EXPECT_EQ(read.value(1), 11);
+    }
+    {
+        auto read = pipe.acquire_read();
+        EXPECT_EQ(read.size(), 1U);
+        EXPECT_TRUE(read.is_segment_end());
+        EXPECT_EQ(read.value(), 12);
+    }
+    pipe.close();
 }
 
 TEST(PipeTests, ExternalRecordReplayForTrivialType)
@@ -278,14 +368,14 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
 
     {
         takt::Pipe<int> record_pipe("record-int");
-        configure_pipe(record_pipe, 8, 0);
+        configure_pipe(record_pipe, 8, 0, 1, 0, 3);
         record_pipe.initialize();
         auto record =
             takt::recordreplay::make_scoped_record(record_pipe, file_path);
         ASSERT_TRUE(record.active());
 
         {
-            auto w = record_pipe.acquire_write_batch(3, true);
+            auto w = record_pipe.acquire_shot_end_write(3);
             w.value(0) = 101;
             w.value(1) = 202;
             w.value(2) = 303;
@@ -295,14 +385,14 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
 
     {
         takt::Pipe<int> replay_pipe("replay-int");
-        configure_pipe(replay_pipe, 8, 0);
+        configure_pipe(replay_pipe, 8, 0, 3, 0, 3);
         replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
         ASSERT_TRUE(replay.active());
 
         {
-            auto w = replay_pipe.acquire_write_batch(3, true);
+            auto w = replay_pipe.acquire_shot_end_write(3);
             w.value(0) = -1;
             w.value(1) = -1;
             w.value(2) = -1;
@@ -310,7 +400,7 @@ TEST(PipeTests, ExternalRecordReplayForTrivialType)
         }
 
         {
-            auto r = replay_pipe.acquire_read_batch(3, 0);
+            auto r = replay_pipe.acquire_read();
             EXPECT_EQ(r.value(0), 101);
             EXPECT_EQ(r.value(1), 202);
             EXPECT_EQ(r.value(2), 303);
@@ -346,7 +436,7 @@ TEST(PipeTests, ScopedRecordResetReportsStreamFailure)
     auto record = takt::recordreplay::make_scoped_record(pipe, file_path);
 
     {
-        auto write = pipe.acquire_write(true);
+        auto write = pipe.acquire_shot_end_write(1);
         write.value().text = "trigger stream failure";
         write.publish();
     }
@@ -378,7 +468,7 @@ TEST(PipeTests, FailedRecordGuardCannotClearReplacementBinding)
         auto failed =
             takt::recordreplay::make_scoped_record(pipe, failed_path);
         {
-            auto write = pipe.acquire_write(true);
+            auto write = pipe.acquire_shot_end_write(1);
             write.value().text = "trigger failure";
             write.publish();
         }
@@ -432,7 +522,7 @@ TEST(PipeTests, FailedReplayGuardCannotClearReplacementBinding)
         auto failed =
             takt::recordreplay::make_scoped_replay(pipe, failed_path);
         {
-            auto write = pipe.acquire_write(true);
+            auto write = pipe.acquire_shot_end_write(1);
             write.value().text = "trigger failure";
             write.publish();
         }
@@ -525,7 +615,7 @@ TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
         EXPECT_FALSE(source.active());
 
         {
-            auto write = source_pipe.acquire_write(true);
+            auto write = source_pipe.acquire_shot_end_write(1);
             write.value() = 314;
             write.publish();
         }
@@ -537,7 +627,7 @@ TEST(PipeTests, ScopedRecordMoveAssignmentTransfersBinding)
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, source_path);
         {
-            auto seed = replay_pipe.acquire_write(true);
+            auto seed = replay_pipe.acquire_shot_end_write(1);
             seed.value() = -1;
             seed.publish();
         }
@@ -584,7 +674,7 @@ TEST(PipeTests, ScopedReplayMoveAssignmentTransfersBinding)
         EXPECT_FALSE(source.active());
 
         {
-            auto seed = source_pipe.acquire_write(true);
+            auto seed = source_pipe.acquire_shot_end_write(1);
             seed.value() = -1;
             seed.publish();
         }
@@ -621,7 +711,7 @@ TEST(PipeTests, ScopedRecordMoveAssignmentFailurePreservesSource)
             takt::recordreplay::make_scoped_record(source_pipe, source_path);
 
         {
-            auto write = target_pipe.acquire_write(true);
+            auto write = target_pipe.acquire_shot_end_write(1);
             write.value().text = "fail target cleanup";
             write.publish();
         }
@@ -668,7 +758,7 @@ TEST(PipeTests, ScopedReplayMoveAssignmentFailurePreservesSource)
             takt::recordreplay::make_scoped_replay(source_pipe, source_path);
 
         {
-            auto write = target_pipe.acquire_write(true);
+            auto write = target_pipe.acquire_shot_end_write(1);
             write.value().text = "trigger replay failure";
             write.publish();
         }
@@ -712,7 +802,7 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
 
     {
         takt::Pipe<int> record_pipe("record-scoped-move");
-        configure_pipe(record_pipe, 8, 0);
+        configure_pipe(record_pipe, 8, 0, 1, 0, 3);
         record_pipe.initialize();
         auto record =
             takt::recordreplay::make_scoped_record(record_pipe, file_path);
@@ -723,7 +813,7 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
         EXPECT_TRUE(moved_record.active());
 
         {
-            auto w = record_pipe.acquire_write_batch(3, true);
+            auto w = record_pipe.acquire_shot_end_write(3);
             w.value(0) = 7;
             w.value(1) = 8;
             w.value(2) = 9;
@@ -737,7 +827,7 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
 
     {
         takt::Pipe<int> replay_pipe("replay-scoped-move");
-        configure_pipe(replay_pipe, 8, 0);
+        configure_pipe(replay_pipe, 8, 0, 3, 0, 3);
         replay_pipe.initialize();
         auto replay =
             takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
@@ -748,7 +838,7 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
         EXPECT_TRUE(moved_replay.active());
 
         {
-            auto w = replay_pipe.acquire_write_batch(3, true);
+            auto w = replay_pipe.acquire_shot_end_write(3);
             w.value(0) = -1;
             w.value(1) = -1;
             w.value(2) = -1;
@@ -756,7 +846,7 @@ TEST(PipeTests, ScopedRecordReplayResetAndMoveTransferOwnership)
         }
 
         {
-            auto r = replay_pipe.acquire_read_batch(3, 0);
+            auto r = replay_pipe.acquire_read();
             EXPECT_EQ(r.value(0), 7);
             EXPECT_EQ(r.value(1), 8);
             EXPECT_EQ(r.value(2), 9);
@@ -777,8 +867,8 @@ TEST(PipeTests, LaterPublishedWriteDoesNotBypassEarlierUnpublishedWrite)
     pipe.initialize();
 
     {
-        auto first = pipe.acquire_write(false);
-        auto second = pipe.acquire_write(true);
+        auto first = pipe.acquire_write();
+        auto second = pipe.acquire_shot_end_write(1);
 
         first.value() = 10;
         second.value() = 20;
@@ -798,8 +888,8 @@ TEST(PipeTests, EarlierUnpublishedWritePreventsFutureWriteAcquisition)
     pipe.initialize();
 
     {
-        auto first = pipe.acquire_write(false);
-        auto second = pipe.acquire_write(true);
+        auto first = pipe.acquire_write();
+        auto second = pipe.acquire_shot_end_write(1);
 
         first.value() = 10;
         second.value() = 20;
@@ -816,10 +906,10 @@ TEST(PipeTests, WriteBlocksWhenFullUntilReadReleasesSpace)
     using namespace std::chrono_literals;
 
     takt::Pipe<int> pipe("write-blocking");
-    configure_pipe(pipe, 2, 0);
+    configure_pipe(pipe, 2, 0, 1, 0, 2);
     pipe.initialize();
     {
-        auto w = pipe.acquire_write_batch(2, true);
+        auto w = pipe.acquire_shot_end_write(2);
         w.value(0) = 1;
         w.value(1) = 2;
         w.publish();
@@ -828,7 +918,7 @@ TEST(PipeTests, WriteBlocksWhenFullUntilReadReleasesSpace)
     auto writer = std::async(std::launch::async,
                              [&pipe]
                              {
-                                 auto w = pipe.acquire_write(true);
+                                 auto w = pipe.acquire_shot_end_write(1);
                                  w.value() = 3;
                                  w.publish();
                              });
@@ -862,7 +952,7 @@ TEST(PipeTests, ReadBlocksWhenEmptyUntilWritePublishes)
     EXPECT_EQ(reader.wait_for(100ms), std::future_status::timeout);
 
     {
-        auto w = pipe.acquire_write(true);
+        auto w = pipe.acquire_shot_end_write(1);
         w.value() = 99;
         w.publish();
     }
@@ -916,7 +1006,7 @@ TEST(PipeTests, ConcurrentWritersReadersPreserveDataIntegrity)
                     {
                         break;
                     }
-                    auto w = pipe.acquire_write(true);
+                    auto w = pipe.acquire_shot_end_write(1);
                     w.value() = v;
                     w.publish();
                 }
@@ -1005,7 +1095,7 @@ TEST(PipeTests, HighConcurrencyStressNoLossNoDuplication)
                     {
                         break;
                     }
-                    auto w = pipe.acquire_write(true);
+                    auto w = pipe.acquire_shot_end_write(1);
                     w.value() = v;
                     w.publish();
                 }

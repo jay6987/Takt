@@ -50,7 +50,7 @@ TEST(PipeLifecycleTests, StableObjectIdentityAndIndependentSameNames)
     EXPECT_EQ(first->name(), second->name());
     EXPECT_NE(first.get(), second.get());
     {
-        auto write = first->acquire_write();
+        auto write = first->acquire_shot_end_write(1);
         write.value() = 42;
         write.publish();
     }
@@ -140,17 +140,15 @@ TEST(PipeLifecycleTests, ExplicitCapacityCanBeSmallerThanConfiguredBatches)
     pipe.initialize();
     EXPECT_TRUE(pipe.initialized());
     EXPECT_EQ(pipe.capacity(), 1U);
-    EXPECT_THROW(pipe.acquire_configured_write_batch(true), std::invalid_argument);
-    EXPECT_THROW(pipe.acquire_configured_read_batch(), std::invalid_argument);
-    EXPECT_THROW(pipe.acquire_write_batch(2, true), std::invalid_argument);
-    EXPECT_THROW(pipe.acquire_read_batch(2, 0), std::invalid_argument);
+    EXPECT_THROW(pipe.acquire_write(), std::invalid_argument);
+    EXPECT_THROW(pipe.acquire_shot_end_write(2), std::invalid_argument);
+    EXPECT_THROW(pipe.acquire_read(), std::invalid_argument);
     {
-        auto write = pipe.acquire_write();
+        auto write = pipe.acquire_shot_end_write(1);
         write.value() = 7;
         write.publish();
     }
-    auto read = pipe.acquire_read();
-    EXPECT_EQ(read.value(), 7);
+    EXPECT_THROW(pipe.acquire_read(), std::invalid_argument);
 }
 
 TEST(PipeLifecycleTests, InitializationAllocatesBasketsAndHasStrongFailureGuarantee)
@@ -202,14 +200,8 @@ TEST(PipeLifecycleTests, MissingConfigurationAndAllUninitializedAcquisitionsFail
     EXPECT_THROW(pipe.basket_template(), std::logic_error);
     EXPECT_THROW(pipe.initialize(), std::logic_error);
     EXPECT_THROW(pipe.acquire_write(), std::logic_error);
-    EXPECT_THROW(pipe.acquire_write(false), std::logic_error);
-    EXPECT_THROW(pipe.acquire_write_batch(1, true), std::logic_error);
-    EXPECT_THROW(pipe.acquire_configured_write_batch(true), std::logic_error);
+    EXPECT_THROW(pipe.acquire_shot_end_write(1), std::logic_error);
     EXPECT_THROW(pipe.acquire_read(), std::logic_error);
-    EXPECT_THROW(pipe.acquire_mutable_read(), std::logic_error);
-    EXPECT_THROW(pipe.acquire_read_batch(1), std::logic_error);
-    EXPECT_THROW(pipe.acquire_mutable_read_batch(1), std::logic_error);
-    EXPECT_THROW(pipe.acquire_configured_read_batch(), std::logic_error);
     pipe.set_consumer(
         {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     EXPECT_THROW(pipe.initialize(), std::logic_error);
@@ -260,8 +252,6 @@ TEST(PipeLifecycleTests, InvalidAndDuplicateConfigurationDoNotReplaceAcceptedVal
     EXPECT_THROW(pipe.set_capacity(1), std::logic_error);
     EXPECT_THROW(pipe.request_max_concurrency(), std::logic_error);
     EXPECT_THROW(pipe.set_descriptor({}), std::logic_error);
-    EXPECT_THROW(pipe.set_read_history_policy(takt::ReadHistoryPolicy::Disabled),
-                 std::logic_error);
 }
 
 TEST(PipeLifecycleTests, ConfigurationCancellationDoesNotAllocateOrPermitInitialization)
@@ -286,8 +276,6 @@ TEST(PipeLifecycleTests, ConfigurationCancellationDoesNotAllocateOrPermitInitial
         EXPECT_THROW(pipe.set_capacity(1), std::logic_error);
         EXPECT_THROW(pipe.request_max_concurrency(), std::logic_error);
         EXPECT_THROW(pipe.set_descriptor({}), std::logic_error);
-        EXPECT_THROW(pipe.set_read_history_policy(takt::ReadHistoryPolicy::Disabled),
-                     std::logic_error);
         EXPECT_THROW(pipe.acquire_read(), std::logic_error);
     }
     EXPECT_EQ(BasketProbe::live, 0);
@@ -302,20 +290,16 @@ TEST(PipeLifecycleTests, ConfigurationCancellationDoesNotAllocateOrPermitInitial
     EXPECT_THROW(failed.initialize(), std::logic_error);
 }
 
-TEST(PipeLifecycleTests, DisabledHistoryRejectsConfiguredOverlapBeforeAllocation)
+TEST(PipeLifecycleTests, ConfiguredOverlapInitializesWithoutHistoryPolicy)
 {
     takt::Pipe<int> pipe("overlap");
     pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     pipe.set_consumer(
         {"consumer", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(1)});
-    pipe.set_read_history_policy(takt::ReadHistoryPolicy::Disabled);
-    EXPECT_THROW(pipe.initialize(), std::invalid_argument);
-    EXPECT_FALSE(pipe.initialized());
-    pipe.set_read_history_policy(takt::ReadHistoryPolicy::Snapshot);
     EXPECT_NO_THROW(pipe.initialize());
 }
 
-TEST(PipeLifecycleTests, ConfiguredBatchesUseDefaultsWithoutChangingScalarOrExplicitCalls)
+TEST(PipeLifecycleTests, AcquireReadUsesConfiguredWindowAndResetsOverlapAtSegmentEnd)
 {
     takt::Pipe<int> pipe("configured-batches");
     pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(4)}, 0);
@@ -323,22 +307,22 @@ TEST(PipeLifecycleTests, ConfiguredBatchesUseDefaultsWithoutChangingScalarOrExpl
         {"consumer", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(1)});
     pipe.initialize();
     {
-        auto write = pipe.acquire_configured_write_batch(true);
+        auto write = pipe.acquire_shot_end_write(4);
         ASSERT_EQ(write.size(), 4U);
         for (size_t i = 0; i < write.size(); ++i)
             write.value(i) = static_cast<int>(i + 1);
         write.publish();
     }
-    EXPECT_THROW(pipe.acquire_configured_read_batch(), std::logic_error);
     {
-        auto read = pipe.acquire_read_batch(3, 0);
+        auto read = pipe.acquire_read();
         EXPECT_EQ(read.size(), 3U);
         EXPECT_EQ(read.overlap_size(), 0U);
         EXPECT_EQ(read.value(0), 1);
         EXPECT_EQ(read.value(2), 3);
+        EXPECT_THROW(read.value(), std::logic_error);
     }
     {
-        auto read = pipe.acquire_configured_read_batch();
+        auto read = pipe.acquire_read();
         EXPECT_EQ(read.size(), 2U);
         EXPECT_EQ(read.overlap_size(), 1U);
         EXPECT_EQ(read.value(0), 3);
@@ -346,7 +330,7 @@ TEST(PipeLifecycleTests, ConfiguredBatchesUseDefaultsWithoutChangingScalarOrExpl
         EXPECT_TRUE(read.is_segment_end());
     }
     {
-        auto write = pipe.acquire_write();
+        auto write = pipe.acquire_shot_end_write(1);
         write.value() = 5;
         write.publish();
     }
@@ -355,19 +339,19 @@ TEST(PipeLifecycleTests, ConfiguredBatchesUseDefaultsWithoutChangingScalarOrExpl
         EXPECT_EQ(read.value(), 5);
     }
     {
-        auto write = pipe.acquire_write_batch(2, true);
+        auto write = pipe.acquire_shot_end_write(2);
         EXPECT_EQ(write.size(), 2U);
         write.value(0) = 6;
         write.value(1) = 7;
         write.publish();
     }
-    auto read = pipe.acquire_read_batch(2, 0);
+    auto read = pipe.acquire_read();
     EXPECT_EQ(read.size(), 2U);
     EXPECT_EQ(read.value(0), 6);
     EXPECT_EQ(read.value(1), 7);
 }
 
-TEST(PipeLifecycleTests, ConfiguredReadBatchWithoutOverlapUsesConfiguredSize)
+TEST(PipeLifecycleTests, AcquireReadUsesConfiguredSizeWithoutOverlap)
 {
     takt::Pipe<int> pipe("configured-read");
     pipe.set_producer({"producer", takt::concurrency(1), takt::frames_per_write(4)}, 0);
@@ -375,14 +359,14 @@ TEST(PipeLifecycleTests, ConfiguredReadBatchWithoutOverlapUsesConfiguredSize)
         {"consumer", takt::concurrency(1), takt::frames_per_read(2), takt::overlap(0)});
     pipe.initialize();
     {
-        auto write = pipe.acquire_configured_write_batch(true);
+        auto write = pipe.acquire_shot_end_write(4);
         for (size_t i = 0; i < write.size(); ++i)
             write.value(i) = static_cast<int>(i);
         write.publish();
     }
     for (int first : {0, 2})
     {
-        auto read = pipe.acquire_configured_read_batch();
+        auto read = pipe.acquire_read();
         EXPECT_EQ(read.size(), 2U);
         EXPECT_EQ(read.value(0), first);
         EXPECT_EQ(read.value(1), first + 1);

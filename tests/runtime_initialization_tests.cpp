@@ -204,6 +204,31 @@ TEST(RuntimeInitialization, ReadyPipeCanBeAdoptedButTerminalPipeCannot)
     EXPECT_THROW(terminal.initialize(), std::logic_error);
 }
 
+TEST(RuntimeInitialization, StopClosesEveryPipeBeforeReportingUnterminatedShot)
+{
+    auto first = std::make_shared<takt::Pipe<int>>("unfinished-first");
+    auto second = std::make_shared<takt::Pipe<int>>("unfinished-second");
+    for (const auto& pipe : {first, second})
+    {
+        pipe->set_producer(
+            {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+        pipe->set_consumer(
+            {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+        pipe->set_capacity(2);
+        pipe->initialize();
+        auto write = pipe->acquire_write();
+        write.value() = 7;
+        write.publish();
+    }
+
+    takt::PipelineRuntime runtime({}, {first, second});
+    runtime.initialize();
+    EXPECT_THROW(runtime.request_stop(), takt::PipeUnterminatedSegmentError);
+    EXPECT_TRUE(first->closed());
+    EXPECT_TRUE(second->closed());
+    EXPECT_NO_THROW(runtime.join());
+}
+
 TEST(RuntimeInitialization, EndpointWrappersReferToSamePreparedObject)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("connection");
@@ -284,29 +309,34 @@ TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
     EXPECT_TRUE(target->initialized());
 }
 
-TEST(RuntimeInitialization, RetainedOverlapMayExtendBeyondPhysicalCapacity)
+TEST(RuntimeInitialization, ConfiguredOverlapReadsRetainedRingSlots)
 {
     takt::Pipe<int> pipe("overlap");
-    pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(2)}, 0);
+    pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
     pipe.set_consumer(
-        {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(1)});
-    pipe.set_capacity(2);
+        {"sink", takt::concurrency(1), takt::frames_per_read(2), takt::overlap(1)});
+    pipe.set_capacity(3);
     pipe.initialize();
     {
-        auto write = pipe.acquire_write_batch(2, true);
+        auto write = pipe.acquire_shot_end_write(3);
         write.value(0) = 1;
         write.value(1) = 2;
+        write.value(2) = 3;
         write.publish();
     }
     {
-        auto read = pipe.acquire_read_batch(1);
-        EXPECT_EQ(read.value(0), 1);
-    }
-    {
-        auto read = pipe.acquire_configured_read_batch();
+        auto read = pipe.acquire_read();
         ASSERT_EQ(read.size(), 2U);
+        EXPECT_EQ(read.overlap_size(), 0U);
         EXPECT_EQ(read.value(0), 1);
         EXPECT_EQ(read.value(1), 2);
+    }
+    {
+        auto read = pipe.acquire_read();
+        ASSERT_EQ(read.size(), 2U);
+        EXPECT_EQ(read.overlap_size(), 1U);
+        EXPECT_EQ(read.value(0), 2);
+        EXPECT_EQ(read.value(1), 3);
     }
 }
 } // namespace

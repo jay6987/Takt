@@ -46,7 +46,8 @@ class SingleWorkerDoubleAgent final : public takt::Node
             try
             {
                 auto input = in_.acquire_read();
-                auto output = out_.acquire_write();
+                auto output = input.is_segment_end() ? out_.acquire_shot_end_write(1)
+                                                     : out_.acquire_write();
                 output.value() = input.value() * 2;
                 output.publish();
             }
@@ -372,7 +373,7 @@ class OrderedEmitAgent final : public takt::Node
                 out_.close();
                 break;
             }
-            auto w = out_.acquire_write(true);
+            auto w = out_.acquire_shot_end_write(1);
             w.value() = c;
             w.publish();
             ++expected;
@@ -467,7 +468,7 @@ TEST(NodeTests, SingleWorkerNodePipeDriven)
     serial_agent.start();
     for (int v = 1; v <= 3; ++v)
     {
-        auto wt = serial_in.acquire_write(true);
+        auto wt = serial_in.acquire_shot_end_write(1);
         wt.value() = v;
         wt.publish();
     }
@@ -503,7 +504,7 @@ TEST(NodeTests, MultiWorkerNodePipeDriven)
     parallel_agent.start();
     for (int i = 0; i < 100; ++i)
     {
-        auto wt = parallel_in.acquire_write(true);
+        auto wt = parallel_in.acquire_shot_end_write(1);
         wt.value() = 1;
         wt.publish();
     }
@@ -638,7 +639,7 @@ TEST(NodeTests, MultiStageNodesReconstructOrderedOutput)
 
     for (size_t idx : shuffled_order)
     {
-        auto w = in.acquire_write(true);
+        auto w = in.acquire_shot_end_write(1);
         w.value() = IndexedChar{idx, slogan[idx]};
         w.publish();
     }

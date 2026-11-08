@@ -106,7 +106,8 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
             throw PipeEndpointTypeMismatchError(oss.str());
         }
 
-        auto token = pipe_->acquire_write(packet.is_segment_end);
+        auto token = packet.is_segment_end ? pipe_->acquire_shot_end_write(1)
+                                           : pipe_->acquire_write();
         token.value() = *typed_value;
         token.publish();
     }
@@ -128,15 +129,16 @@ template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
         {
             throw std::invalid_argument("cannot bridge a pipe to itself");
         }
-        auto read_token = pipe_->acquire_mutable_read();
+        auto read_token = pipe_->acquire_read();
         if (!typed_target)
         {
             throw PipeEndpointTypeMismatchError(
                 "pipe endpoint type mismatch: " + debug_name() + " -> " +
                 target.debug_name());
         }
-        auto write_token =
-            typed_target->pipe_->acquire_write(read_token.is_segment_end());
+        auto write_token = read_token.is_segment_end()
+                               ? typed_target->pipe_->acquire_shot_end_write(1)
+                               : typed_target->pipe_->acquire_write();
         using std::swap;
         swap(read_token.mutable_value(), write_token.value());
         write_token.publish();

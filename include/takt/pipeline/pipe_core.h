@@ -15,6 +15,14 @@ struct PipeClosedAndEmptySignal : public std::runtime_error
     PipeClosedAndEmptySignal() : std::runtime_error("pipe is closed and empty") {}
 };
 
+struct PipeUnterminatedSegmentError : public std::runtime_error
+{
+    explicit PipeUnterminatedSegmentError(const std::string& message)
+        : std::runtime_error(message)
+    {
+    }
+};
+
 struct PipeFaultedError : public std::runtime_error
 {
     explicit PipeFaultedError(const std::string& message) : std::runtime_error(message)
@@ -39,7 +47,7 @@ struct PipeCoreWriteBatch
     std::vector<size_t> slots;
 };
 
-struct PipeCoreReadBatch
+struct PipeCoreReadWindow
 {
     size_t token_id = 0;
     size_t start_pos = 0;
@@ -54,7 +62,8 @@ struct PipeCoreReadBatch
 class PipeCore
 {
   public:
-    PipeCore(std::string name, size_t capacity);
+    PipeCore(std::string name, size_t capacity, size_t retained_overlap,
+             size_t max_write_size);
 
     PipeCore(const PipeCore&) = delete;
     PipeCore& operator=(const PipeCore&) = delete;
@@ -72,9 +81,7 @@ class PipeCore
     PipeCoreWriteBatch acquire_write_batch(size_t count, bool is_segment_end);
     void release_write_batch(size_t token_id, bool published);
 
-    PipeCoreReadBatch acquire_read_batch(size_t read_size, size_t overlap_size,
-                                         bool has_previous_read,
-                                         size_t previous_read_size);
+    PipeCoreReadWindow acquire_read_window(size_t read_size, size_t overlap_size);
     void release_read_batch(size_t token_id);
 
   private:
@@ -93,21 +100,24 @@ class PipeCore
     {
         size_t token_id = 0;
         size_t start_pos = 0;
-        size_t size = 0;
+        size_t stride = 0;
         bool released = false;
     };
 
     size_t position_to_slot(size_t absolute_pos) const noexcept;
+    size_t reusable_read_pos_locked() const noexcept;
     void flush_released_writes_locked();
     void flush_released_reads_locked();
-    void seal_visible_tail_locked();
     [[noreturn]] void throw_terminal_locked() const;
     size_t next_segment_end_locked() const;
+    size_t next_read_end_locked() const;
     PendingWrite& find_write_locked(size_t token_id);
     PendingRead& find_read_locked(size_t token_id);
 
     std::string name_;
     const size_t capacity_;
+    const size_t retained_overlap_;
+    const size_t max_write_size_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -126,6 +136,7 @@ class PipeCore
     std::deque<PendingRead> pending_reads_;
     bool write_failure_ = false;
     bool publication_blocked_ = false;
+    bool unterminated_close_reported_ = false;
     std::string fault_message_;
     bool closed_ = false;
 };

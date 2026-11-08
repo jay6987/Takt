@@ -187,11 +187,24 @@ void PipelineRuntime::request_stop()
 {
     if (state_ != State::Failed)
         state_ = State::Stopped;
+    std::exception_ptr close_failure;
     for (const auto& pipe : pipes_)
-        pipe->close();
+    {
+        try
+        {
+            pipe->close();
+        }
+        catch (...)
+        {
+            if (!close_failure)
+                close_failure = std::current_exception();
+        }
+    }
     for (auto& node : nodes_)
     {
         node->request_stop();
     }
+    if (close_failure)
+        std::rethrow_exception(close_failure);
 }
 } // namespace takt

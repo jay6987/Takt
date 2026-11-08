@@ -10,9 +10,8 @@ sequenceDiagram
     participant Pipe as Pipe<T>
     participant Core as PipeCore
 
-    Producer->>Pipe: acquire_write(is_segment_end)
-    Producer->>Pipe: acquire_write_batch(count, is_segment_end)
-    Pipe->>Core: acquire_write_batch(count, is_segment_end)
+    Producer->>Pipe: acquire_write() or acquire_shot_end_write(count)
+    Pipe->>Core: reserve configured default or explicit count
 
     alt free slots available and not closed
         Core-->>Pipe: slots reserved
@@ -26,6 +25,15 @@ sequenceDiagram
         Core-->>Core: notify readers/writers
     else closed or no space
         Core-->>Producer: block or throw PipeClosedAndEmptySignal
+    end
+
+    Note over Producer,Core: No-argument writes reserve write_size and are not ShotEnd; acquire_shot_end_write explicitly marks final writes
+
+    opt close with an unfinished Shot
+        Producer->>Pipe: close()
+        Pipe->>Core: close and notify waiters
+        Core-->>Producer: throw PipeUnterminatedSegmentError
+        Note over Pipe,Core: Published tail remains drainable without a fabricated ShotEnd
     end
 
     opt token destroyed without publish

@@ -5,8 +5,10 @@
 
 namespace takt
 {
-PipeCore::PipeCore(std::string name, size_t capacity)
-    : name_(std::move(name)), capacity_(capacity)
+PipeCore::PipeCore(std::string name, size_t capacity, size_t retained_overlap,
+                   size_t max_write_size)
+    : name_(std::move(name)), capacity_(capacity), retained_overlap_(retained_overlap),
+      max_write_size_(max_write_size)
 {
     if (capacity_ == 0)
     {
@@ -50,10 +52,22 @@ std::string PipeCore::fault_message() const
 
 void PipeCore::close()
 {
-    std::lock_guard<std::mutex> lk(mutex_);
-    closed_ = true;
-    seal_visible_tail_locked();
-    cv_.notify_all();
+    bool report_unterminated = false;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        closed_ = true;
+        if (!next_write_is_segment_start_ && !unterminated_close_reported_)
+        {
+            unterminated_close_reported_ = true;
+            report_unterminated = true;
+        }
+        cv_.notify_all();
+    }
+    if (report_unterminated)
+    {
+        throw PipeUnterminatedSegmentError(
+            "pipe '" + name_ + "' closed with an unterminated segment");
+    }
 }
 
 void PipeCore::close_with_error(std::string message)
@@ -69,7 +83,6 @@ void PipeCore::close_with_error(std::string message)
         write_failure_ = true;
     }
     closed_ = true;
-    seal_visible_tail_locked();
     cv_.notify_all();
 }
 
@@ -83,13 +96,19 @@ PipeCoreWriteBatch PipeCore::acquire_write_batch(size_t count, bool is_segment_e
     {
         throw std::invalid_argument("write batch count cannot exceed pipe capacity");
     }
+    if (count > max_write_size_)
+    {
+        throw std::invalid_argument(
+            "write batch count cannot exceed configured write_size");
+    }
 
     std::unique_lock<std::mutex> lk(mutex_);
     cv_.wait(lk,
              [this, count]
              {
                  return closed_ || write_failure_ ||
-                        (write_reserve_pos_ + count <= read_release_pos_ + capacity_);
+                        (write_reserve_pos_ + count <=
+                         reusable_read_pos_locked() + capacity_);
              });
 
     if (write_failure_)
@@ -131,9 +150,7 @@ void PipeCore::release_write_batch(size_t token_id, bool published)
     cv_.notify_all();
 }
 
-PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_size,
-                                               bool has_previous_read,
-                                               size_t previous_read_size)
+PipeCoreReadWindow PipeCore::acquire_read_window(size_t read_size, size_t overlap_size)
 {
     if (read_size == 0)
     {
@@ -143,25 +160,21 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
     {
         throw std::invalid_argument("overlap size must be smaller than read size");
     }
-    if (overlap_size > 0 && !has_previous_read)
+    if (overlap_size > retained_overlap_)
     {
-        throw std::logic_error("overlap read requires at least one previous batch");
-    }
-    if (overlap_size > 0 && previous_read_size < overlap_size)
-    {
-        throw std::logic_error("overlap cache is smaller than requested overlap size");
+        throw std::invalid_argument("requested overlap exceeds configured retention");
     }
 
     const size_t stride = read_size - overlap_size;
 
     auto calc_read_end = [this](size_t start_pos, size_t wanted_size) -> size_t
     {
-        const size_t segment_end = next_segment_end_locked();
-        if (segment_end == 0)
+        const size_t read_end = next_read_end_locked();
+        if (read_end == 0)
         {
             return start_pos;
         }
-        return std::min(start_pos + wanted_size, segment_end);
+        return std::min(start_pos + wanted_size, read_end);
     };
 
     std::unique_lock<std::mutex> lk(mutex_);
@@ -179,7 +192,7 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
             {
                 return true;
             }
-            if (next_segment_end_locked() == 0)
+            if (next_read_end_locked() == 0)
             {
                 return false;
             }
@@ -192,7 +205,9 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
             const size_t actual_read_size = read_end - read_start;
             const size_t actual_overlap = read_reserve_pos_ - read_start;
             const size_t actual_stride = actual_read_size - actual_overlap;
-            const bool hit_segment_end = read_end == next_segment_end_locked();
+            const bool hit_segment_end =
+                next_segment_end_locked() != 0 &&
+                read_end == next_segment_end_locked();
 
             // If this window reaches the committed segment end, return what is
             // available instead of waiting for the next segment to complete.
@@ -200,7 +215,7 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
                    (closed_ && actual_stride > 0);
         });
 
-    if (next_segment_end_locked() == 0)
+    if (next_read_end_locked() == 0)
     {
         throw_terminal_locked();
     }
@@ -218,14 +233,15 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
         throw_terminal_locked();
     }
 
-    PipeCoreReadBatch batch;
+    PipeCoreReadWindow batch;
     batch.token_id = next_token_id_++;
     batch.start_pos = read_start;
     batch.read_size = actual_read_size;
     batch.overlap_size = actual_overlap;
     batch.stride = actual_stride;
     batch.is_segment_start = (read_start == read_segment_start_pos_);
-    batch.is_segment_end = read_end == next_segment_end_locked();
+    batch.is_segment_end =
+        next_segment_end_locked() != 0 && read_end == next_segment_end_locked();
     batch.slots.reserve(actual_stride);
 
     for (size_t i = 0; i < actual_stride; ++i)
@@ -234,7 +250,7 @@ PipeCoreReadBatch PipeCore::acquire_read_batch(size_t read_size, size_t overlap_
     }
 
     pending_reads_.push_back(
-        PendingRead{batch.token_id, read_reserve_pos_, actual_stride, false});
+        PendingRead{batch.token_id, read_start, actual_stride, false});
     read_reserve_pos_ += actual_stride;
 
     if (batch.is_segment_end)
@@ -257,6 +273,22 @@ void PipeCore::release_read_batch(size_t token_id)
 size_t PipeCore::position_to_slot(size_t absolute_pos) const noexcept
 {
     return absolute_pos % capacity_;
+}
+
+size_t PipeCore::reusable_read_pos_locked() const noexcept
+{
+    const size_t overlap_start = std::max(
+        read_segment_start_pos_,
+        read_reserve_pos_ > retained_overlap_ ? read_reserve_pos_ - retained_overlap_ : 0);
+    size_t reusable_pos = overlap_start;
+    for (const auto& token : pending_reads_)
+    {
+        if (!token.released)
+        {
+            reusable_pos = std::min(reusable_pos, token.start_pos);
+        }
+    }
+    return reusable_pos;
 }
 
 void PipeCore::flush_released_writes_locked()
@@ -293,20 +325,6 @@ void PipeCore::flush_released_writes_locked()
             }
         }
     }
-    if (closed_)
-    {
-        seal_visible_tail_locked();
-    }
-}
-
-void PipeCore::seal_visible_tail_locked()
-{
-    if (write_visible_pos_ > read_release_pos_ &&
-        (committed_segment_ends_.empty() ||
-         committed_segment_ends_.back() < write_visible_pos_))
-    {
-        committed_segment_ends_.push_back(write_visible_pos_);
-    }
 }
 
 void PipeCore::throw_terminal_locked() const
@@ -325,11 +343,25 @@ size_t PipeCore::next_segment_end_locked() const
     return end == committed_segment_ends_.end() ? 0 : *end;
 }
 
+size_t PipeCore::next_read_end_locked() const
+{
+    const size_t segment_end = next_segment_end_locked();
+    if (segment_end != 0)
+    {
+        return segment_end;
+    }
+    if (read_reserve_pos_ < write_visible_pos_)
+    {
+        return write_visible_pos_;
+    }
+    return 0;
+}
+
 void PipeCore::flush_released_reads_locked()
 {
     while (!pending_reads_.empty() && pending_reads_.front().released)
     {
-        read_release_pos_ += pending_reads_.front().size;
+        read_release_pos_ += pending_reads_.front().stride;
         pending_reads_.pop_front();
 
         while (!committed_segment_ends_.empty() &&
