@@ -64,21 +64,30 @@ int main(int argc, char** argv)
         return 1;
     }
     auto outer_in = std::make_shared<takt::Pipe<int>>("outer-in");
-    outer_in->set_producer({"source", 1, 1}, 0);
-    outer_in->set_consumer({bridge ? "input-bridge" : "double", 1, 1, 0});
+    outer_in->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)},
+                           0);
+    outer_in->set_consumer({bridge ? "input-bridge" : "double", takt::concurrency(1),
+                            takt::frames_per_read(1), takt::overlap(0)});
     auto outer_out = std::make_shared<takt::Pipe<int>>("outer-out");
-    outer_out->set_producer({bridge ? "output-bridge" : "double", 1, 1}, 0);
-    outer_out->set_consumer({"sink", 1, 1, 0});
+    outer_out->set_producer({bridge ? "output-bridge" : "double", takt::concurrency(1),
+                             takt::frames_per_write(1)},
+                            0);
+    outer_out->set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     auto inner_in = outer_in;
     auto inner_out = outer_out;
     if (bridge)
     {
         inner_in = std::make_shared<takt::Pipe<int>>("inner-in");
-        inner_in->set_producer({"input-bridge", 1, 1}, 0);
-        inner_in->set_consumer({"double", 1, 1, 0});
+        inner_in->set_producer(
+            {"input-bridge", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+        inner_in->set_consumer({"double", takt::concurrency(1),
+                                takt::frames_per_read(1), takt::overlap(0)});
         inner_out = std::make_shared<takt::Pipe<int>>("inner-out");
-        inner_out->set_producer({"double", 1, 1}, 0);
-        inner_out->set_consumer({"output-bridge", 1, 1, 0});
+        inner_out->set_producer(
+            {"double", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+        inner_out->set_consumer({"output-bridge", takt::concurrency(1),
+                                 takt::frames_per_read(1), takt::overlap(0)});
         inner_in->set_capacity(16);
         inner_out->set_capacity(16);
     }

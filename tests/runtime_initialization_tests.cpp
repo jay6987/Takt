@@ -39,8 +39,10 @@ class CountingPipe final : public takt::PipeBase
   public:
     CountingPipe() : PipeBase("same-name")
     {
-        set_producer_config({"producer", 1, 1});
-        set_consumer({"consumer", 1, 1, 0});
+        set_producer_config(
+            {"producer", takt::concurrency(1), takt::frames_per_write(1)});
+        set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
+                      takt::overlap(0)});
     }
     bool closed() const noexcept override
     {
@@ -87,8 +89,9 @@ TEST(RuntimeInitialization, ExplicitPhaseAndEmptyRuntime)
 TEST(RuntimeInitialization, StopBeforeInitializationCancelsRegisteredPipes)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("cancelled");
-    pipe->set_producer({"source", 1, 1}, 0);
-    pipe->set_consumer({"sink", 1, 1, 0});
+    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe->set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     auto probe = std::make_shared<Probe>();
     takt::PipelineRuntime runtime({probe}, {pipe});
     runtime.request_stop();
@@ -190,8 +193,9 @@ TEST(RuntimeInitialization, PartialStartupStopsNodesAndPreservesFailure)
 TEST(RuntimeInitialization, ReadyPipeCanBeAdoptedButTerminalPipeCannot)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("ready");
-    pipe->set_producer({"source", 1, 1}, 0);
-    pipe->set_consumer({"sink", 1, 1, 0});
+    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe->set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     pipe->initialize();
     takt::PipelineRuntime runtime({}, {pipe});
     EXPECT_NO_THROW(runtime.initialize());
@@ -203,8 +207,9 @@ TEST(RuntimeInitialization, ReadyPipeCanBeAdoptedButTerminalPipeCannot)
 TEST(RuntimeInitialization, EndpointWrappersReferToSamePreparedObject)
 {
     auto pipe = std::make_shared<takt::Pipe<int>>("connection");
-    pipe->set_producer({"source", 1, 1}, 0);
-    pipe->set_consumer({"sink", 1, 1, 0});
+    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    pipe->set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     auto graph = takt::PipelineBuilder::create("graph");
     auto source = std::make_shared<Probe>();
     auto sink = std::make_shared<Probe>();
@@ -258,8 +263,10 @@ TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
     auto target = std::make_shared<takt::Pipe<int>>("inner");
     for (const auto& pipe : {source, target})
     {
-        pipe->set_producer({"producer", 1, 1}, 0);
-        pipe->set_consumer({"consumer", 1, 1, 0});
+        pipe->set_producer(
+            {"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+        pipe->set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
+                            takt::overlap(0)});
     }
     auto inner = std::make_shared<takt::PipelineRuntime>(
         std::vector<std::shared_ptr<takt::NodeBase>>{});
@@ -280,8 +287,9 @@ TEST(RuntimeInitialization, BridgePipesAreIncludedInInnerRuntimePreparation)
 TEST(RuntimeInitialization, RetainedOverlapMayExtendBeyondPhysicalCapacity)
 {
     takt::Pipe<int> pipe("overlap");
-    pipe.set_producer({"source", 1, 2}, 0);
-    pipe.set_consumer({"sink", 1, 3, 1});
+    pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(2)}, 0);
+    pipe.set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(1)});
     pipe.set_capacity(2);
     pipe.initialize();
     {

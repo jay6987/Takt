@@ -26,6 +26,12 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- **Breaking:** `ProducerConfig` and `ConsumerConfig` require strong named numeric
+  arguments: `concurrency(...)`, `frames_per_write(...)`, `frames_per_read(...)`
+  and `overlap(...)`, in fixed order. Bare integers and mismatched types no
+  longer compile. Name-only/default construction and omitted trailing arguments
+  retain concurrency 1, one frame per write/read and overlap 0; stored numeric
+  fields and runtime validation are unchanged.
 - Expanded DOT defaults to cross-cluster Direct connections and explicit Bridge
   worker nodes; descriptive mappings without metadata remain Unresolved.
   Collapsed subgraphs summarize local mapping modes.

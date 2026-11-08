@@ -57,12 +57,14 @@ class DoubleNode final : public takt::Node
 int main()
 {
     auto in = std::make_shared<takt::Pipe<int>>("node-in");
-    in->set_producer({"source", 1, 1}, 0);
-    in->set_consumer({"double", 1, 1, 0});
+    in->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    in->set_consumer(
+        {"double", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     in->set_capacity(16);
     auto out = std::make_shared<takt::Pipe<int>>("node-out");
-    out->set_producer({"double", 1, 1}, 0);
-    out->set_consumer({"sink", 1, 1, 0});
+    out->set_producer({"double", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+    out->set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     out->set_capacity(16);
     in->initialize();
     out->initialize();

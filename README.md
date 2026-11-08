@@ -124,12 +124,19 @@ installed-package consumers:
 
 ```cpp
 auto frames = std::make_shared<takt::Pipe<std::vector<float>>>("frames");
-frames->set_producer({"source", 1, 1}, std::vector<float>(1024));
-frames->set_consumer({"sink", 1, 1, 0});
+frames->set_producer(
+    {"source", takt::concurrency(1), takt::frames_per_write(1)}, std::vector<float>(1024));
+frames->set_consumer(
+    {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
 frames->set_capacity(2); // optional positive override, no concurrency lower bound
 frames->set_read_history_policy(takt::ReadHistoryPolicy::Disabled);
 frames->initialize(); // standalone; a bound runtime can prepare it instead
 ```
+
+Numeric configuration arguments require these named, distinct types; bare
+integers and mismatched argument types no longer compile. Argument order is
+fixed, but trailing arguments may be omitted: `{"source"}` / `{"sink"}` retain
+concurrency 1, one frame per write/read and overlap 0.
 
 Without an explicit capacity, the default satisfies the larger endpoint slot
 demand; `request_max_concurrency()` requests their sum. Finish configuration

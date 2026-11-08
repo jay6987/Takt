@@ -13,8 +13,9 @@ int main()
         return 1;
     }
     auto pipe = std::make_shared<takt::Pipe<int>>("installed-package");
-    pipe->set_consumer({"sink", 1, 1, 0});
-    pipe->set_producer({"source", 1, 1}, 0);
+    pipe->set_consumer(
+        {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
+    pipe->set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
     pipe->set_capacity(2);
     takt::PipelineRuntime runtime({}, {pipe});
     runtime.initialize();

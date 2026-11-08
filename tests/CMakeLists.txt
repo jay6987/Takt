@@ -11,6 +11,7 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(takt_smoke_test
+    pipe_config_tests.cpp
     pipe_lifecycle_tests.cpp
     runtime_initialization_tests.cpp
     pipeline_builder_tests.cpp
@@ -94,6 +95,45 @@ expect_registry_binding_api_private(set_record TAKT_TEST_SET_RECORD_PRIVATE)
 expect_registry_binding_api_private(set_replay TAKT_TEST_SET_REPLAY_PRIVATE)
 expect_registry_binding_api_private(clear_record TAKT_TEST_CLEAR_RECORD_PRIVATE)
 expect_registry_binding_api_private(clear_replay TAKT_TEST_CLEAR_REPLAY_PRIVATE)
+
+function(check_pipe_config_compilation selector expected)
+    try_compile(
+        config_compiles
+        "${CMAKE_CURRENT_BINARY_DIR}/pipe_config_${selector}"
+        SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/pipe_config_compile_test.cpp"
+        CMAKE_FLAGS
+            "-DCMAKE_CXX_STANDARD=17"
+            "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
+            "-DINCLUDE_DIRECTORIES:STRING=${PROJECT_SOURCE_DIR}/include"
+        COMPILE_DEFINITIONS "-DTAKT_TEST_${selector}"
+        OUTPUT_VARIABLE config_compile_output
+    )
+
+    if(expected AND NOT config_compiles)
+        message(FATAL_ERROR
+            "Pipe configuration compile-test control failed:\n${config_compile_output}")
+    elseif(NOT expected AND config_compiles)
+        message(FATAL_ERROR "Pipe configuration ${selector} must not compile")
+    endif()
+endfunction()
+
+check_pipe_config_compilation(CONFIG_CONTROL TRUE)
+foreach(selector IN ITEMS
+    PRODUCER_BARE
+    CONSUMER_BARE
+    PRODUCER_BARE_CONCURRENCY
+    PRODUCER_BARE_FRAMES
+    CONSUMER_BARE_CONCURRENCY
+    CONSUMER_BARE_FRAMES
+    CONSUMER_BARE_OVERLAP
+    PRODUCER_SWAPPED
+    CONSUMER_SWAPPED_CONCURRENCY
+    CONSUMER_SWAPPED_OVERLAP
+    PRODUCER_READ_FRAMES
+    CONSUMER_WRITE_FRAMES
+)
+    check_pipe_config_compilation("${selector}" FALSE)
+endforeach()
 
 if(_takt_try_compile_target_type_was_defined)
     set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_takt_previous_try_compile_target_type}")

@@ -25,9 +25,13 @@ The public API is defined by `include/takt/takt.h` and the headers it exports:
 - Additive API changes require explicit release-note entry.
 - Behavior changes that alter error/close/lifecycle semantics require new tests.
 
-The approved unreleased lifecycle migration explicitly supersedes the original
-freeze for pipes/runtime preparation. `PipeBuilder` and immediately initialized
-Pipe constructors are removed. See [Changelog](../CHANGELOG.md) and
+The approved unreleased lifecycle and named-configuration migrations explicitly
+supersede the original freeze for pipes/runtime preparation. `PipeBuilder` and
+immediately initialized Pipe constructors are removed. `ProducerConfig` and
+`ConsumerConfig` replace aggregate initialization with typed constructors;
+numeric arguments require distinct named wrappers in fixed order, without a
+legacy integer overload. Existing defaults and numeric fields remain unchanged.
+See [Changelog](../CHANGELOG.md) and
 [Pipe Usage](pipe-usage.md) for the required migration; C++17 remains the minimum.
 
 ## Public Declarations Snapshot
@@ -62,6 +66,11 @@ Pipe constructors are removed. See [Changelog](../CHANGELOG.md) and
 - `class PipeBase`
 - `struct ProducerConfig`
 - `struct ConsumerConfig`
+- `struct Concurrency`, `struct FramesPerWrite`, `struct FramesPerRead`, `struct Overlap`
+- `constexpr Concurrency concurrency(size_t) noexcept`
+- `constexpr FramesPerWrite frames_per_write(size_t) noexcept`
+- `constexpr FramesPerRead frames_per_read(size_t) noexcept`
+- `constexpr Overlap overlap(size_t) noexcept`
 - `enum class BufferPolicy`
 - `template <typename T> class Pipe`
 - `class AnyPipeEndpoint`

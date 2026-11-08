@@ -16,8 +16,10 @@ using namespace std::chrono_literals;
 std::shared_ptr<takt::Pipe<int>> pipe(const std::string& name, size_t capacity = 1)
 {
     auto result = std::make_shared<takt::Pipe<int>>(name);
-    result->set_producer({"producer", 1, 1}, 0);
-    result->set_consumer({"consumer", 1, 1, 0});
+    result->set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)},
+                         0);
+    result->set_consumer(
+        {"consumer", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
     result->set_capacity(capacity);
     return result;
 }
@@ -140,8 +142,9 @@ class CountingIntPipe final : public takt::Pipe<int>
   public:
     explicit CountingIntPipe(const std::string& name) : Pipe(name)
     {
-        set_producer({"producer", 1, 1}, 0);
-        set_consumer({"consumer", 1, 1, 0});
+        set_producer({"producer", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+        set_consumer({"consumer", takt::concurrency(1), takt::frames_per_read(1),
+                      takt::overlap(0)});
     }
     void initialize() override
     {

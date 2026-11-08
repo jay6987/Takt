@@ -6,8 +6,9 @@ This page shows the minimal usage pattern for `Pipe<T>`.
 
 ```cpp
 takt::Pipe<int> numbers("numbers");
-numbers.set_producer({"source", 1, 1}, 0);
-numbers.set_consumer({"sink", 1, 1, 0});
+numbers.set_producer({"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
+numbers.set_consumer(
+    {"sink", takt::concurrency(1), takt::frames_per_read(1), takt::overlap(0)});
 numbers.set_capacity(8);
 numbers.initialize();
 
@@ -48,6 +49,50 @@ while (true)
 - Always call `publish()` on write tokens that should become visible.
 - Call `close()` when no more data will be written.
 - Consumer loops should exit on `PipeClosedAndEmptySignal`.
+
+## Named Configuration Arguments
+
+Configuration constructors require distinct strong types, in this fixed order:
+
+```cpp
+// Producer: name, concurrency, frames per write
+numbers.set_producer({"source", takt::concurrency(2), takt::frames_per_write(4)}, 0);
+// Consumer: name, concurrency, frames per read, overlap
+numbers.set_consumer(
+    {"sink", takt::concurrency(3), takt::frames_per_read(5), takt::overlap(2)});
+```
+
+`concurrency()` returns `Concurrency`, `frames_per_write()` returns
+`FramesPerWrite`, `frames_per_read()` returns `FramesPerRead`, and `overlap()`
+returns `Overlap`. Each wraps a `size_t` without implicit conversions.
+Bare integers, swapped argument types, and substituting write frames for read
+frames (or vice versa) fail compilation. This intentionally replaces the old
+positional-integer construction; there is no compatibility overload.
+
+The stored numeric fields are unchanged: the helpers map to `concurrency`,
+`write_size`, `read_size`, and `overlap_size`, respectively. These counts refer
+to pipe slots/baskets, not elements within a basket. Runtime validation still
+requires positive concurrency and frame counts and `overlap < frames_per_read`.
+In particular, one frame per read requires overlap 0, not 1.
+
+Defaults are unchanged. Default construction or name-only configuration uses
+concurrency 1, one frame per write/read, and overlap 0. Trailing arguments may
+be omitted, but any explicitly supplied numeric argument must have the correct
+type:
+
+```cpp
+// Alternatives for configuring a fresh pipe:
+numbers.set_producer({"source"}, 0);
+numbers.set_consumer({"sink"});
+// Or specify only concurrency; frame counts and overlap retain their defaults:
+numbers.set_producer({"source", takt::concurrency(2)}, 0);
+numbers.set_consumer({"sink", takt::concurrency(3)});
+// Or omit just overlap:
+numbers.set_consumer({"sink", takt::concurrency(3), takt::frames_per_read(5)});
+```
+
+These are alternatives, not repeated calls: each endpoint can be configured only once.
+The per-call acquisition APIs below still accept ordinary integer counts.
 
 ## Capacity and Batch Defaults
 

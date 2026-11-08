@@ -8,8 +8,9 @@ For trivially copyable payloads (for example `int`), no codec registration is ne
 
 ```cpp
 takt::Pipe<int> record_pipe("record-int");
-record_pipe.set_producer({"source", 1, 3}, 0);
-record_pipe.set_consumer({"sink", 1, 3, 0});
+record_pipe.set_producer({"source", takt::concurrency(1), takt::frames_per_write(3)}, 0);
+record_pipe.set_consumer(
+    {"sink", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(0)});
 record_pipe.set_capacity(8);
 record_pipe.initialize();
 auto record = takt::recordreplay::make_scoped_record(record_pipe, file_path);
@@ -25,8 +26,9 @@ Replay:
 
 ```cpp
 takt::Pipe<int> replay_pipe("replay-int");
-replay_pipe.set_producer({"seed", 1, 3}, 0);
-replay_pipe.set_consumer({"replay", 1, 3, 0});
+replay_pipe.set_producer({"seed", takt::concurrency(1), takt::frames_per_write(3)}, 0);
+replay_pipe.set_consumer(
+    {"replay", takt::concurrency(1), takt::frames_per_read(3), takt::overlap(0)});
 replay_pipe.set_capacity(8);
 replay_pipe.initialize();
 auto replay = takt::recordreplay::make_scoped_replay(replay_pipe, file_path);
