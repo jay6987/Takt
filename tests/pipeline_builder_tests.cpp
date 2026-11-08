@@ -395,8 +395,7 @@ TEST(PipelineBuilderTests,
 TEST(PipelineBuilderTests,
      BuildRuntimeInjectsDeclaredPortsWithoutChannels)
 {
-    auto builder =
-        takt::PipelineBuilder::create("graph-runtime-declared-only");
+    auto builder = takt::PipelineBuilder::create("graph-runtime-declared-only");
     builder.add_node("standalone");
     builder.add_input_port("standalone", "in");
     builder.add_output_port("standalone", "out");
