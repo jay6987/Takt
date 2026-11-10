@@ -112,7 +112,7 @@ template <typename T> class Pipe : public PipeBase
     }
 
     // Closes with a nonempty failure message, retaining the first failure.
-    void close_with_error(std::string message)
+    void close_with_error(std::string message) override
     {
         if (message.empty())
             throw std::invalid_argument(

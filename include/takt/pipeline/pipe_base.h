@@ -49,6 +49,8 @@ class PipeBase
     virtual bool faulted() const noexcept = 0;
     // Closes the pipe and wakes blocked operations.
     virtual void close() = 0;
+    // Records terminal failure and wakes blocked readers and writers.
+    virtual void close_with_error(std::string message) = 0;
     // Validates configuration and allocates typed runtime storage.
     virtual void initialize() = 0;
     // Rejects configuration that cannot be initialized safely.

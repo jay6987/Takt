@@ -142,6 +142,8 @@ class Node : public NodeBase
     size_t task_queue_capacity() const noexcept;
 
   protected:
+    // Waits for queued/running tasks and their payload destruction to finish.
+    void wait_for_tasks();
     // Acquires input and builds a task for the next ingress sequence.
     virtual std::unique_ptr<Task> build_task(uint64_t sequence_id) = 0;
     // Processes one task on the indicated permanent worker.
@@ -166,6 +168,8 @@ class Node : public NodeBase
     void close_task_queue() noexcept;
     // Releases queued tasks outside the task-queue lock.
     void discard_task_queue();
+    // Releases an admitted task's drain count after its payload is destroyed.
+    void finish_task();
     // Waits for queued work or termination, transferring task ownership.
     bool pop_task(std::unique_ptr<Task>& task);
     // Waits until queue capacity permits building another task.
@@ -179,5 +183,6 @@ class Node : public NodeBase
     std::mutex task_queue_mutex_;
     std::condition_variable task_queue_cv_;
     bool task_queue_closed_ = false;
+    size_t outstanding_tasks_ = 0;
 };
 } // namespace takt

@@ -7,6 +7,9 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
+- `FrameTaskNode` groups lazy, bounded worker tasks into ordered frames, retaining
+  frame ownership through task drain, ingress completion and failure cleanup.
+  Successful-frame progress is independent of task sequence numbers.
 - Standalone LLVM 23 quality gate and CI enforcement for 80-column C++ lines,
   file/function descriptions and one-parameter-per-line declarations.
 - Independent >=80% production line/branch coverage, ASan+UBSan and TSan gates,
@@ -31,6 +34,8 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- **Breaking:** custom `PipeBase` implementations must provide
+  `close_with_error(string)` for grouped-node fault propagation.
 - **Breaking:** Removed `PipelineBuilder::declare(name)` and its process-wide
   named-state registry. Use `create(name)` for independent graphs, even with
   identical names; pass a builder reference or copy its handle for explicit

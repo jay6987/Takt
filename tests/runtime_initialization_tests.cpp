@@ -64,6 +64,9 @@ class CountingPipe final : public takt::PipeBase
     }
     // Leaves synthetic storage untouched when runtime cleanup closes pipes.
     void close() override {}
+    // Synthetic pipes do not transport data; record fault notification as
+    // close.
+    void close_with_error(std::string) override {}
     // Validates common settings and optionally injects a configuration failure.
     void validate_configuration() const override
     {

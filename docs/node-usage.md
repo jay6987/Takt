@@ -81,3 +81,59 @@ Run after build:
 ```bash
 ./build/examples/node/takt_node_example
 ```
+
+## Grouped frame execution
+
+Derive from `takt::FrameTaskNode` when several workers should finish one frame
+before the next frame is acquired. This reuses Node's permanent workers and
+bounded queue; no nested pool or adapter-owned latch is needed.
+
+Implement these hooks:
+
+1. `create_frame()` allocates an owning `Frame` subclass before acquisition.
+   Store move-only input/output tokens and per-frame numerical views in it.
+2. `acquire_frame(Frame&)` acquires/prepares that context on ingress. Return
+   false only for normal EOF; propagate errors. `frame.index` starts at zero.
+3. Optional `on_frame_start(Frame&)` runs once on ingress.
+4. `build_frame_task(Frame&, task_index)` lazily returns each work item, or null
+   to seal the group. Empty groups are valid. The local task index and inner
+   `Task::sequence_id` restart at zero for every frame; they are not frame IDs.
+5. `process_frame_task(worker_index, Frame&, Task&)` runs on a permanent worker.
+   Workers may share read-only input but must write disjoint ranges, or use
+   exclusive preallocated worker-local state. The API does not enforce bounds
+   or introduce a TokenView.
+6. Optional `on_frame_complete(Frame&)` runs once on ingress after sealing and
+   after every admitted task **and its payload destruction** has drained.
+   Swap buffers and mark an output token published here. The context is then
+   released, followed by the successful `completed_frames()` count.
+
+Tasks may finish before generation seals without prematurely completing a frame.
+The next acquire happens only after completion, context release and counting,
+independently of Pipe capacity. `publish()` only marks a reservation; downstream
+visibility requires token release.
+
+Call protected `register_pipe(shared_ptr<PipeBase>, is_output)` during
+configuration for all associated lifecycle dependencies. Normal EOF closes only
+outputs. Failure preserves the original `exception_ptr` before fault-closing
+registered pipes and stopping admission; cancellation normal-closes them to
+wake blocked acquisition. Queued/running work drains before context destruction,
+but abandoned work never counts as a successful frame. `failure()` reports
+errors after `join()`; `join()` itself does not rethrow numerical hook failures.
+An optional `on_frame_failure(exception_ptr)` records the original cause in an
+application-wide error collector before pipes notify other nodes. This hook can
+be called concurrently by failing workers and must be thread-safe.
+
+Custom `PipeBase` implementations must now implement `close_with_error(string)`
+as well as normal close. The standard `Pipe<T>` implements both. Fault closure
+is distinct from EOF; neither token destruction nor a normal close certifies
+successful processing.
+
+As with Node, a derived destructor must call `request_stop(); join();` **before**
+its members and hook implementations disappear. Keep associated Pipe objects
+alive through token cleanup. Do not call `join()` from a worker/ingress hook.
+
+The installed C++17 consumer in
+[`tests/package_consumer/main.cpp`](../tests/package_consumer/main.cpp) exercises
+an empty grouped frame. The scheduler/ownership/error tests in
+[`tests/frame_task_node_tests.cpp`](../tests/frame_task_node_tests.cpp) show
+nonempty groups, permanent workers, bounded admission and cancellation.

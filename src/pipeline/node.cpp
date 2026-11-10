@@ -278,6 +278,7 @@ void Node::run_ingress_manager_wrapped()
                     break;
                 }
                 task_queue_.push_back(std::move(task));
+                ++outstanding_tasks_;
             }
             task_queue_cv_.notify_one();
             ++sequence_id;
@@ -299,59 +300,6 @@ void Node::run_ingress_manager_wrapped()
     on_ingress_manager_done();
 }
 
-bool Node::wait_for_task_admission()
-{
-    std::unique_lock<std::mutex> lk(task_queue_mutex_);
-    task_queue_cv_.wait(lk,
-                        [this]
-                        {
-                            return task_queue_closed_ ||
-                                   task_queue_.size() < task_queue_capacity_;
-                        });
-    return !task_queue_closed_;
-}
-
-bool Node::pop_task(std::unique_ptr<Task>& task)
-{
-    std::unique_lock<std::mutex> lk(task_queue_mutex_);
-    task_queue_cv_.wait(lk, [this]
-                        { return task_queue_closed_ || !task_queue_.empty(); });
-    if (task_queue_.empty())
-    {
-        return false;
-    }
-
-    task = std::move(task_queue_.front());
-    task_queue_.pop_front();
-    lk.unlock();
-    task_queue_cv_.notify_all();
-    return true;
-}
-
-void Node::close_task_queue() noexcept
-{
-    {
-        std::lock_guard<std::mutex> lk(task_queue_mutex_);
-        if (task_queue_closed_)
-        {
-            return;
-        }
-        task_queue_closed_ = true;
-    }
-    task_queue_cv_.notify_all();
-}
-
-void Node::discard_task_queue()
-{
-    std::deque<std::unique_ptr<Task>> discarded;
-    {
-        std::lock_guard<std::mutex> lk(task_queue_mutex_);
-        task_queue_closed_ = true;
-        discarded.swap(task_queue_);
-    }
-    task_queue_cv_.notify_all();
-}
-
 void Node::run_worker_wrapped(size_t worker_index)
 {
     try
@@ -365,6 +313,8 @@ void Node::run_worker_wrapped(size_t worker_index)
             }
             if (task->kind == TaskKind::Stop)
             {
+                task.reset();
+                finish_task();
                 break;
             }
 
@@ -378,9 +328,13 @@ void Node::run_worker_wrapped(size_t worker_index)
                 // Capture the cause before token cleanup wakes other failing
                 // threads.
                 remember_failure(std::current_exception());
+                request_stop();
+                task.reset();
+                finish_task();
                 throw;
             }
             task.reset();
+            finish_task();
         }
     }
     catch (const std::exception& e)

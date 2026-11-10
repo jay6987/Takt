@@ -98,6 +98,9 @@ State and bound nodes are released when their owners release ownership.
 Stop and join running nodes before releasing their dependencies.
 
 - `Node`: unified node type; default worker count is 1.
+- `FrameTaskNode`: ordered frames with lazy, bounded parallel tasks; Takt drains
+  all work before ingress completes/releases a frame. See
+  [grouped frame usage](docs/node-usage.md#grouped-frame-execution).
 - Override `build_task(sequence_id)` and `process_task(worker_index, task)` for workloads.
 - Set worker count via `Node("name", worker_count)` when parallelism is needed.
 - Use `set_stage_name`, `add_input_port_name`, and `add_output_port_name` to annotate exception context.
