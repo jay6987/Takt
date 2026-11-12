@@ -7,9 +7,9 @@ This project follows Semantic Versioning.
 ## [Unreleased]
 
 ### Added
-- `FrameTaskNode` groups lazy, bounded worker tasks into ordered frames, retaining
-  frame ownership through task drain, ingress completion and failure cleanup.
-  Successful-frame progress is independent of task sequence numbers.
+- Task barriers provide grouped lazy work over ordinary `Node` instances.
+  Successful barrier callbacks run on ingress after the barrier and all earlier
+  task payloads have been destroyed.
 - Standalone LLVM 23 quality gate and CI enforcement for 80-column C++ lines,
   file/function descriptions and one-parameter-per-line declarations.
 - Independent >=80% production line/branch coverage, ASan+UBSan and TSan gates,
@@ -34,6 +34,17 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- **Breaking:** Removed `FrameTaskNode`. Grouped work now uses ordinary
+  `Node` tasks marked with `Task::barrier` and the ingress-only
+  `on_barrier_complete(sequence_id)` hook. Keep frame context and move-only
+  tokens on ingress until that hook.
+- **Breaking:** `Node` now accepts only `Node(name, worker_count = 1)`;
+  `task_queue_capacity` has been removed. Ingress reserves an idle worker
+  before calling `build_task`, so there is no backlog and at most
+  `worker_count` tasks are in flight. Pipe-owning nodes close their own pipes
+  on stop and fault-close them from `on_exception`.
+- `TaskKind::Stop` requests terminal node cancellation rather than terminating
+  an individual worker while ingress remains active.
 - **Breaking:** custom `PipeBase` implementations must provide
   `close_with_error(string)` for grouped-node fault propagation.
 - **Breaking:** Removed `PipelineBuilder::declare(name)` and its process-wide

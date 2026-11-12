@@ -44,9 +44,7 @@ class FrameNode final : public takt::Node
     FrameNode(FramePipe& input,
               FramePipe& output,
               bool inject_failure)
-        : Node("frame",
-               1,
-               1),
+        : Node("frame"),
           input_(input),
           output_(output),
           inject_failure_(inject_failure)
@@ -134,24 +132,22 @@ class BlockedNode final : public takt::Node
   public:
     // Blocks processing on a shared signal to expose bounded ingress behavior.
     explicit BlockedNode(std::shared_future<void> release)
-        : Node("bounded",
-               1,
-               1),
+        : Node("bounded"),
           release_(std::move(release))
     {
     }
     std::atomic<int> built{0};
-    std::promise<void> second_built;
+    std::promise<void> first_built;
 
   private:
-    // Produces four tasks and signals when a second task is admitted.
+    // Produces four tasks and signals when the first task is built.
     std::unique_ptr<Task> build_task(uint64_t sequence) override
     {
         if (sequence == 4)
             return nullptr;
         auto task = std::make_unique<Task>();
-        if (built.fetch_add(1) == 1)
-            second_built.set_value();
+        if (built.fetch_add(1) == 0)
+            first_built.set_value();
         return task;
     }
     // Waits for the test to release the permanently blocked worker.
@@ -160,6 +156,129 @@ class BlockedNode final : public takt::Node
     {
         release_.wait();
     }
+    std::shared_future<void> release_;
+};
+
+class ReservedTokenNode final : public takt::Node
+{
+  public:
+    // Hold all workers to expose whether ingress prefetches pipe tokens.
+    ReservedTokenNode(takt::Pipe<int>& input,
+                      takt::Pipe<int>& output,
+                      size_t workers,
+                      std::shared_future<void> release)
+        : Node("reserved",
+               workers),
+          input_(input),
+          output_(output),
+          release_(std::move(release))
+    {
+    }
+    // Keep referenced tokens and synchronization state alive through join.
+    ~ReservedTokenNode() override
+    {
+        request_stop();
+        join();
+    }
+    std::promise<void> saturated;
+    std::atomic<size_t> built{0}, started{0}, destroyed{0};
+
+  private:
+    struct TokenTask final : Task
+    {
+        ReservedTokenNode& owner;
+        takt::Pipe<int>::ReadToken input;
+        takt::Pipe<int>::WriteToken output;
+        // Count cleanup after processing rather than merely counting returns.
+        explicit TokenTask(ReservedTokenNode& node) : owner(node) {}
+        // Record retirement of each handed-off payload.
+        ~TokenTask() override
+        {
+            ++owner.destroyed;
+        }
+    };
+    // Acquire tokens only after a worker has been reserved for this payload.
+    std::unique_ptr<Task> build_task(uint64_t sequence) override
+    {
+        if (sequence == worker_count() + 1)
+            return nullptr;
+        auto task = std::make_unique<TokenTask>(*this);
+        task->input = input_.acquire_read();
+        task->output = output_.acquire_shot_end_write(1);
+        ++built;
+        return task;
+    }
+    // Hold the workers until the test observes lazy acquisition.
+    void process_task(size_t,
+                      Task& base) override
+    {
+        auto& task = static_cast<TokenTask&>(base);
+        if (++started == worker_count())
+            saturated.set_value();
+        release_.wait();
+        task.output.value() = task.input.value() * 2;
+        task.output.publish();
+    }
+    takt::Pipe<int>& input_;
+    takt::Pipe<int>& output_;
+    std::shared_future<void> release_;
+};
+
+class PreparingTokenNode final : public takt::Node
+{
+  public:
+    // Hold ingress after acquisition to exercise cancellation of a reservation.
+    PreparingTokenNode(takt::Pipe<int>& input,
+                       takt::Pipe<int>& output,
+                       std::shared_future<void> release)
+        : Node("preparing",
+               2),
+          input_(input),
+          output_(output),
+          release_(std::move(release))
+    {
+    }
+    // Preserve hook and task state until all framework threads have joined.
+    ~PreparingTokenNode() override
+    {
+        request_stop();
+        join();
+    }
+    std::promise<void> preparing;
+    std::atomic<size_t> destroyed{0}, processed{0};
+
+  private:
+    struct TokenTask final : Task
+    {
+        PreparingTokenNode& owner;
+        takt::Pipe<int>::ReadToken input;
+        takt::Pipe<int>::WriteToken output;
+        // Track a payload whose tokens have been acquired but not handed off.
+        explicit TokenTask(PreparingTokenNode& node) : owner(node) {}
+        // Count destruction when ingress cancels the pending handoff.
+        ~TokenTask() override
+        {
+            ++owner.destroyed;
+        }
+    };
+    // Simulate ingress preparation while keeping both tokens in the payload.
+    std::unique_ptr<Task> build_task(uint64_t) override
+    {
+        auto task = std::make_unique<TokenTask>(*this);
+        task->input = input_.acquire_read();
+        task->output = output_.acquire_write();
+        preparing.set_value();
+        release_.wait();
+        return task;
+    }
+    // Cancellation must prevent this payload from reaching a reserved worker.
+    void process_task(size_t,
+                      Task&) override
+    {
+        ++processed;
+    }
+    takt::Pipe<int>& input_;
+    takt::Pipe<int>& output_;
     std::shared_future<void> release_;
 };
 } // namespace
@@ -381,21 +500,93 @@ TEST(PipelineContracts,
     target->close();
 }
 
-// Verifies ingress cannot exceed bounded task admission while workers block.
+// Verifies ingress does not build ahead while its only worker is busy.
 TEST(PipelineContracts,
-     NodeAdmissionIsBoundedWhileWorkerIsBusy)
+     NodeAdmissionIsLazyWhileWorkerIsBusy)
 {
     std::promise<void> release;
     BlockedNode node(release.get_future().share());
-    auto ready = node.second_built.get_future();
+    auto ready = node.first_built.get_future();
     node.start();
     EXPECT_EQ(ready.wait_for(2s), std::future_status::ready);
-    EXPECT_EQ(node.task_queue_capacity(), 1U);
     std::this_thread::sleep_for(50ms);
-    EXPECT_EQ(node.built.load(), 2);
+    EXPECT_EQ(node.built.load(), 1);
     release.set_value();
     node.join();
     EXPECT_EQ(node.built.load(), 4);
+}
+
+// Verify neither read nor write tokens are prefetched without an idle worker.
+TEST(PipelineContracts,
+     BusyWorkersPreventTokenAcquisitionAndStopWakesAdmission)
+{
+    for (size_t workers : {1U, 3U})
+        for (bool stop : {false, true})
+        {
+            takt::Pipe<int> input("lazy-input");
+            takt::Pipe<int> output("lazy-output");
+            configure_pipe(input, workers + 1, 0);
+            configure_pipe(output, workers + 1, 0);
+            input.initialize();
+            output.initialize();
+            for (size_t i = 0; i <= workers; ++i)
+            {
+                auto write = input.acquire_shot_end_write(1);
+                write.value() = static_cast<int>(i);
+                write.publish();
+            }
+            std::promise<void> release;
+            ReservedTokenNode node(input, output, workers,
+                                   release.get_future().share());
+            auto ready = node.saturated.get_future();
+            node.start();
+            EXPECT_EQ(ready.wait_for(2s), std::future_status::ready);
+            std::this_thread::sleep_for(50ms);
+            EXPECT_EQ(node.built.load(), workers);
+            EXPECT_EQ(input.queued_frame_count(), 1U);
+            EXPECT_EQ(output.queued_frame_count(), 0U);
+            if (stop)
+                node.request_stop();
+            release.set_value();
+            node.join();
+            EXPECT_EQ(node.failure(), nullptr);
+            EXPECT_EQ(node.built.load(), workers + (stop ? 0 : 1));
+            EXPECT_EQ(node.destroyed.load(), node.built.load());
+            for (size_t i = 0; i < node.built.load(); ++i)
+            {
+                auto read = output.acquire_read();
+                EXPECT_EQ(read.value(), static_cast<int>(i) * 2);
+            }
+        }
+}
+
+// Stop during preparation cancels the reserved worker and uncommitted tokens.
+TEST(PipelineContracts,
+     StopDuringTaskPreparationCancelsHandoffAndReleasesTokens)
+{
+    takt::Pipe<int> input("preparing-input");
+    takt::Pipe<int> output("preparing-output");
+    configure_pipe(input, 1, 0);
+    configure_pipe(output, 1, 0);
+    input.initialize();
+    output.initialize();
+    {
+        auto write = input.acquire_shot_end_write(1);
+        write.publish();
+    }
+    std::promise<void> release;
+    PreparingTokenNode node(input, output, release.get_future().share());
+    auto ready = node.preparing.get_future();
+    node.start();
+    EXPECT_EQ(ready.wait_for(2s), std::future_status::ready);
+    node.request_stop();
+    release.set_value();
+    node.join();
+    EXPECT_EQ(node.failure(), nullptr);
+    EXPECT_EQ(node.processed.load(), 0U);
+    EXPECT_EQ(node.destroyed.load(), 1U);
+    EXPECT_TRUE(output.faulted());
+    EXPECT_NO_THROW((void)input.acquire_write());
 }
 
 // Verifies token-owned frames drain and processing failures reach runtime join.

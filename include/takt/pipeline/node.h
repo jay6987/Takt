@@ -1,4 +1,4 @@
-// Defines bounded node workers, lifecycle hooks and structured failure context.
+// Defines lazy node ingress, permanent workers and completion barriers.
 #pragma once
 
 #include <atomic>
@@ -118,31 +118,30 @@ class Node : public NodeBase
     {
         uint64_t sequence_id = 0;
         TaskKind kind = TaskKind::Normal;
+        // Drain this task and all predecessors before ingress builds another.
+        bool barrier = false;
         // Allows derived task payloads to be destroyed through the base.
         virtual ~Task() = default;
     };
 
-    // Configures permanent workers and bounded queued-task admission.
+    // Configures permanent workers with no queued-task backlog.
     explicit Node(std::string node_name,
-                  size_t worker_count = 1,
-                  size_t task_queue_capacity = 1);
+                  size_t worker_count = 1);
     // Requests stop and joins any remaining asynchronous execution.
     ~Node() override;
 
     // Launches the ingress manager and permanent worker set.
     void start() override final;
-    // Waits for ingress and workers, propagating execution failures.
+    // Waits for ingress and workers; failure() retains execution errors.
     void join() override final;
-    // Requests stop and wakes blocked task-queue operations.
+    // Requests stop and wakes blocked admission and worker operations.
     void request_stop() noexcept override;
 
     // Returns the configured number of permanent processing workers.
     size_t worker_count() const noexcept;
-    // Returns the maximum number of queued tasks awaiting workers.
-    size_t task_queue_capacity() const noexcept;
 
   protected:
-    // Waits for queued/running tasks and their payload destruction to finish.
+    // Waits for handed-off/running tasks and payload destruction to finish.
     void wait_for_tasks();
     // Acquires input and builds a task for the next ingress sequence.
     virtual std::unique_ptr<Task> build_task(uint64_t sequence_id) = 0;
@@ -152,7 +151,9 @@ class Node : public NodeBase
     // Runs after successful processing, before the task is destroyed.
     virtual void on_task_done(size_t worker_index,
                               const Task& task);
-    // Runs after ingress has stopped admitting new tasks.
+    // Runs on ingress after a barrier and all preceding payloads are destroyed.
+    virtual void on_barrier_complete(uint64_t sequence_id);
+    // Runs after admission ends and all admitted payloads are destroyed.
     virtual void on_ingress_manager_done();
     // Runs when the indicated processing worker terminates.
     virtual void on_worker_done(size_t worker_index);
@@ -165,24 +166,28 @@ class Node : public NodeBase
     // Drives one worker while retaining and reporting failures.
     void run_worker_wrapped(size_t worker_index);
     // Closes task admission and wakes waiting workers.
-    void close_task_queue() noexcept;
-    // Releases queued tasks outside the task-queue lock.
-    void discard_task_queue();
+    void close_task_admission() noexcept;
+    // Releases unclaimed task slots outside the coordination lock.
+    void discard_task_slots();
     // Releases an admitted task's drain count after its payload is destroyed.
     void finish_task();
-    // Waits for queued work or termination, transferring task ownership.
-    bool pop_task(std::unique_ptr<Task>& task);
-    // Waits until queue capacity permits building another task.
-    bool wait_for_task_admission();
+    // Announces worker availability and waits for its reserved task or closure.
+    bool pop_task(size_t worker_index,
+                  std::unique_ptr<Task>& task);
+    // Reserves an idle worker before ingress acquires tokens or builds a task.
+    bool wait_for_task_admission(size_t& worker_index);
+    // Retains and reports the active exception before task token cleanup.
+    void handle_exception(bool has_worker_index,
+                          size_t worker_index) noexcept;
 
     size_t worker_count_;
-    size_t task_queue_capacity_;
     std::future<void> ingress_manager_;
     std::vector<std::future<void>> workers_;
-    std::deque<std::unique_ptr<Task>> task_queue_;
-    std::mutex task_queue_mutex_;
-    std::condition_variable task_queue_cv_;
-    bool task_queue_closed_ = false;
+    std::vector<std::unique_ptr<Task>> task_slots_;
+    std::deque<size_t> idle_workers_;
+    std::mutex admission_mutex_;
+    std::condition_variable admission_cv_;
+    bool admission_closed_ = false;
     size_t outstanding_tasks_ = 0;
 };
 } // namespace takt

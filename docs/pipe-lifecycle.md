@@ -87,8 +87,8 @@ remains safe; a failed runtime preserves its original failure.
 
 - `acquire_read()` uses the configured consumer window and returns a move-only
   read token.
-- Use `value(index)` / `mutable_value(index)` for windows; indexless access is
-  valid only when the returned window has one value.
+- Use `value(index)` to access window elements; indexless access is valid only
+  when the returned window has one value.
 - `overlap_frames < frames_per_read` must hold.
 - The window advances by `frames_per_read - overlap_frames`.
 - During an open Shot, a window becomes readable once its full stride of newly
@@ -108,14 +108,23 @@ remains safe; a failed runtime preserves its original failure.
 
 ## Backpressure Rule
 
-Image backpressure is centralized in the pipe; task admission is bounded too.
+Image backpressure is centralized in the pipe, and task admission reserves
+workers before task construction.
 
 - Producers block when capacity is exhausted.
 - Consumers block when data is unavailable.
-- Node includes an internal task queue for manager-to-worker dispatch.
-- Its default capacity is one task. At most `worker_count + queue_capacity + 1`
-  tasks can hold tokens, including a manager currently constructing a task.
+- Node has no manager-to-worker backlog. Ingress reserves an idle worker before
+  `build_task`, so at most `worker_count` built tasks can hold tokens.
 - End-to-end pacing remains constrained by pipe capacity and token flow.
+
+`Node` no longer accepts `task_queue_capacity`; its constructor is
+`Node(name, worker_count = 1)`. To group several tasks over one token-owned
+frame, retain the context on ingress and mark the final task with
+`Task::barrier`. The successful `on_barrier_complete(sequence_id)` hook runs
+after the barrier and all earlier task payloads have been destroyed. Publish
+the output and release the context there; a no-op barrier task represents an
+empty group. See [Node Usage](node-usage.md#grouped-work-with-barriers) for a
+vector-region example.
 
 ## Close Protocol
 

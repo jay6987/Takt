@@ -20,29 +20,44 @@ class DoubleNode final : public takt::Node
     {
     }
 
+    // Finish callbacks before destroying the bound pipe references.
+    ~DoubleNode() override
+    {
+        request_stop();
+        join();
+    }
+
+    // Wake ingress if it is waiting for an input or output token.
+    void request_stop() noexcept override
+    {
+        Node::request_stop();
+        in_->close();
+        out_->close();
+    }
+
   protected:
     struct DoubleTask final : public takt::Node::Task
     {
-        int value = 0;
-        bool shot_end = false;
+        takt::Pipe<int>::ReadToken input;
+        takt::Pipe<int>::WriteToken output;
     };
 
-    // Reads one frame into a task, closing output when input is drained.
+    // Reserves both tokens on ingress only after a worker is available.
     std::unique_ptr<takt::Node::Task> build_task(uint64_t) override
     {
+        auto task = std::make_unique<DoubleTask>();
         try
         {
-            auto r = in_->acquire_read();
-            auto task = std::make_unique<DoubleTask>();
-            task->value = r.value();
-            task->shot_end = r.is_shot_end();
-            return task;
+            task->input = in_->acquire_read();
         }
         catch (const takt::PipeClosedAndEmptySignal&)
         {
-            out_->close();
             return nullptr;
         }
+        task->output = task->input.is_shot_end()
+                           ? out_->acquire_shot_end_write(1)
+                           : out_->acquire_write();
+        return task;
     }
 
     // Doubles and publishes the task payload while preserving shot markers.
@@ -50,10 +65,22 @@ class DoubleNode final : public takt::Node
                       takt::Node::Task& task) override
     {
         auto& t = static_cast<DoubleTask&>(task);
-        auto w = t.shot_end ? out_->acquire_shot_end_write(1)
-                            : out_->acquire_write();
-        w.value() = t.value * 2;
-        w.publish();
+        t.output.value() = t.input.value() * 2;
+        t.output.publish();
+    }
+
+    // Close output only after every admitted task has drained.
+    void on_ingress_manager_done() override
+    {
+        out_->close();
+    }
+
+    // Fault both boundaries before failing task tokens are released.
+    void on_exception(const takt::NodeExceptionContext& context) override
+    {
+        in_->close_with_error(context.message);
+        out_->close_with_error(context.message);
+        Node::on_exception(context);
     }
 
   private:

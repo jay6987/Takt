@@ -60,8 +60,7 @@ add_library(takt STATIC
     src/recordreplay/recordreplay.cpp
     src/logging/global_logger.cpp
     src/pipeline/node.cpp
-    src/pipeline/node_queue.cpp
-    src/pipeline/frame_task_node.cpp
+    src/pipeline/node_dispatch.cpp
     src/pipeline/subgraph_node.cpp
     src/pipeline/pipeline_builder.cpp
     src/pipeline/pipeline_runtime.cpp

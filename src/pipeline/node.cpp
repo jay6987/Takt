@@ -1,4 +1,4 @@
-// Runs bounded node ingress and workers with coordinated stop propagation.
+// Runs lazy node ingress and workers with coordinated stop propagation.
 #include "takt/pipeline/node.h"
 
 #include <exception>
@@ -140,19 +140,14 @@ NodeBase::build_exception_context(std::string message,
 }
 
 Node::Node(std::string node_name,
-           size_t worker_count,
-           size_t task_queue_capacity)
+           size_t worker_count)
     : NodeBase(std::move(node_name)),
       worker_count_(worker_count),
-      task_queue_capacity_(task_queue_capacity)
+      task_slots_(worker_count)
 {
     if (worker_count_ == 0)
     {
         throw std::invalid_argument("worker_count cannot be zero");
-    }
-    if (task_queue_capacity_ == 0)
-    {
-        throw std::invalid_argument("task queue capacity cannot be zero");
     }
 }
 
@@ -170,9 +165,9 @@ void Node::start()
     }
 
     {
-        std::lock_guard<std::mutex> lk(task_queue_mutex_);
-        task_queue_.clear();
-        task_queue_closed_ = false;
+        std::lock_guard<std::mutex> lk(admission_mutex_);
+        idle_workers_.clear();
+        admission_closed_ = false;
     }
 
     ingress_manager_ = std::async(std::launch::async,
@@ -206,17 +201,12 @@ void Node::join()
 void Node::request_stop() noexcept
 {
     NodeBase::request_stop();
-    close_task_queue();
+    close_task_admission();
 }
 
 size_t Node::worker_count() const noexcept
 {
     return worker_count_;
-}
-
-size_t Node::task_queue_capacity() const noexcept
-{
-    return task_queue_capacity_;
 }
 
 void Node::on_task_done(size_t worker_index,
@@ -227,6 +217,8 @@ void Node::on_task_done(size_t worker_index,
 }
 
 void Node::on_ingress_manager_done() {}
+
+void Node::on_barrier_complete(uint64_t) {}
 
 void Node::on_worker_done(size_t worker_index)
 {
@@ -260,7 +252,8 @@ void Node::run_ingress_manager_wrapped()
         uint64_t sequence_id = 0;
         while (!stop_requested())
         {
-            if (!wait_for_task_admission())
+            size_t worker_index = 0;
+            if (!wait_for_task_admission(worker_index))
             {
                 break;
             }
@@ -271,33 +264,44 @@ void Node::run_ingress_manager_wrapped()
             }
 
             task->sequence_id = sequence_id;
+            const bool barrier = task->barrier;
             {
-                std::lock_guard<std::mutex> lk(task_queue_mutex_);
-                if (task_queue_closed_)
+                std::lock_guard<std::mutex> lk(admission_mutex_);
+                if (admission_closed_)
                 {
                     break;
                 }
-                task_queue_.push_back(std::move(task));
+                task_slots_[worker_index] = std::move(task);
                 ++outstanding_tasks_;
             }
-            task_queue_cv_.notify_one();
+            admission_cv_.notify_all();
+            if (barrier)
+            {
+                wait_for_tasks();
+                if (stop_requested() || failure())
+                    break;
+                on_barrier_complete(sequence_id);
+            }
             ++sequence_id;
         }
     }
-    catch (const std::exception& e)
+    catch (...)
     {
-        remember_failure(std::current_exception());
-        on_exception(build_exception_context(e.what(), false, false, 0));
+        handle_exception(false, 0);
+    }
+
+    close_task_admission();
+    if (stop_requested())
+        discard_task_slots();
+    wait_for_tasks();
+    try
+    {
+        on_ingress_manager_done();
     }
     catch (...)
     {
-        remember_failure(std::current_exception());
-        on_exception(
-            build_exception_context("unknown exception", true, false, 0));
+        handle_exception(false, 0);
     }
-
-    close_task_queue();
-    on_ingress_manager_done();
 }
 
 void Node::run_worker_wrapped(size_t worker_index)
@@ -305,14 +309,11 @@ void Node::run_worker_wrapped(size_t worker_index)
     try
     {
         std::unique_ptr<Task> task;
-        while (pop_task(task))
+        while (pop_task(worker_index, task))
         {
-            if (!task)
+            if (stop_requested() || task->kind == TaskKind::Stop)
             {
-                continue;
-            }
-            if (task->kind == TaskKind::Stop)
-            {
+                request_stop();
                 task.reset();
                 finish_task();
                 break;
@@ -325,37 +326,56 @@ void Node::run_worker_wrapped(size_t worker_index)
             }
             catch (...)
             {
-                // Capture the cause before token cleanup wakes other failing
-                // threads.
-                remember_failure(std::current_exception());
-                request_stop();
+                handle_exception(worker_count_ > 1, worker_index);
                 task.reset();
                 finish_task();
-                throw;
+                break;
             }
             task.reset();
             finish_task();
         }
     }
-    catch (const std::exception& e)
+    catch (...)
     {
-        remember_failure(std::current_exception());
-        request_stop();
-        discard_task_queue();
-        const bool has_worker_index = worker_count_ > 1;
-        on_exception(build_exception_context(e.what(), false, has_worker_index,
-                                             worker_index));
+        handle_exception(worker_count_ > 1, worker_index);
+    }
+
+    try
+    {
+        on_worker_done(worker_index);
     }
     catch (...)
     {
-        remember_failure(std::current_exception());
-        request_stop();
-        discard_task_queue();
-        const bool has_worker_index = worker_count_ > 1;
-        on_exception(build_exception_context("unknown exception", true,
-                                             has_worker_index, worker_index));
+        handle_exception(worker_count_ > 1, worker_index);
     }
+}
 
-    on_worker_done(worker_index);
+void Node::handle_exception(bool has_worker_index,
+                            size_t worker_index) noexcept
+{
+    const auto cause = std::current_exception();
+    remember_failure(cause);
+    request_stop();
+    try
+    {
+        try
+        {
+            std::rethrow_exception(cause);
+        }
+        catch (const std::exception& e)
+        {
+            on_exception(build_exception_context(
+                e.what(), false, has_worker_index, worker_index));
+        }
+        catch (...)
+        {
+            on_exception(build_exception_context(
+                "unknown exception", true, has_worker_index, worker_index));
+        }
+    }
+    catch (...)
+    {
+        error("node exception observer threw; preserving original failure");
+    }
 }
 } // namespace takt

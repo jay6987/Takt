@@ -4,55 +4,70 @@
 #if __has_include(<takt/pipeline/builder.h>)
 #error "The installed package must not expose the removed PipeBuilder header"
 #endif
+#if __has_include(<takt/pipeline/frame_task_node.h>)
+#error "The installed package must not expose FrameTaskNode"
+#endif
 
-class InstalledGroup final : public takt::FrameTaskNode
+class InstalledBarrier final : public takt::Node
 {
   public:
-    // Check linked grouped scheduling through installed C++17 headers.
-    InstalledGroup()
-        : FrameTaskNode("installed-group",
-                        2)
+    // Exercise an empty-group sentinel through the installed Node API.
+    InstalledBarrier()
+        : Node("installed-barrier",
+               2)
     {
     }
+
     // Join before the derived hook table is released.
-    ~InstalledGroup() override
+    ~InstalledBarrier() override
     {
         request_stop();
         join();
     }
 
   private:
-    // Use an empty frame to exercise explicit zero-task completion.
-    std::unique_ptr<Frame> create_frame() override
+    // Return one barrier sentinel to complete a group with no work items.
+    std::unique_ptr<Task> build_task(uint64_t) override
     {
-        return std::make_unique<Frame>();
+        if (offered)
+            return nullptr;
+        offered = true;
+        auto task = std::make_unique<Task>();
+        task->barrier = true;
+        return task;
     }
-    // Admit exactly one frame.
-    bool acquire_frame(Frame& frame) override
-    {
-        return frame.index == 0;
-    }
-    // Seal without numerical work.
-    std::unique_ptr<Task> build_frame_task(Frame&,
-                                           uint64_t) override
-    {
-        return nullptr;
-    }
-    // Empty groups never invoke workers.
-    void process_frame_task(size_t,
-                            Frame&,
-                            Task&) override
+
+    // The sentinel has no numerical work to perform.
+    void process_task(size_t,
+                      Task&) override
     {
     }
+
+    // Observe successful completion after the sentinel is destroyed.
+    void on_barrier_complete(uint64_t) override
+    {
+        ++completed_group_count;
+    }
+
+  public:
+    // Expose successful completion to the package smoke-test entry point.
+    size_t completed_groups() const
+    {
+        return completed_group_count;
+    }
+
+  private:
+    bool offered = false;
+    size_t completed_group_count = 0;
 };
 
 // Verifies linked package behavior using only installed public interfaces.
 int main()
 {
-    InstalledGroup group;
+    InstalledBarrier group;
     group.start();
     group.join();
-    if (group.failure() || group.completed_frames() != 1)
+    if (group.failure() || group.completed_groups() != 1)
         return 2;
     auto graph = takt::PipelineBuilder::create("installed-dot");
     graph.add_node("source");

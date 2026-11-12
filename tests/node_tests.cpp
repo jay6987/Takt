@@ -534,7 +534,172 @@ class StoppableNode final : public takt::Node
     std::promise<void>& started_promise_;
     std::atomic<bool>& observed_stop_;
 };
+
+class LifecycleProbe final : public takt::Node
+{
+  public:
+    // Inject one failure into a framework-controlled execution phase.
+    LifecycleProbe(int phase,
+                   bool unknown = false,
+                   bool throwing_observer = false)
+        : Node("lifecycle"),
+          phase_(phase),
+          unknown_(unknown),
+          throwing_observer_(throwing_observer)
+    {
+    }
+    // Join while task destructors and hooks can still access probe state.
+    ~LifecycleProbe() override
+    {
+        request_stop();
+        join();
+    }
+    std::atomic<size_t> live{0}, processed{0}, barriers{0}, cleanup{0};
+    std::atomic<bool> reported_unknown{false};
+
+  private:
+    struct ProbeTask final : Task
+    {
+        LifecycleProbe& owner;
+        // Keep track of admitted payloads through successful or failed work.
+        explicit ProbeTask(LifecycleProbe& probe) : owner(probe)
+        {
+            ++owner.live;
+        }
+        // Task destruction must precede ingress completion notifications.
+        ~ProbeTask() override
+        {
+            --owner.live;
+        }
+    };
+    // Throw the original cause without disguising nonstandard exceptions.
+    void fail_at(int phase)
+    {
+        if (phase_ != phase)
+            return;
+        if (unknown_)
+            throw 42;
+        throw std::domain_error("original lifecycle failure");
+    }
+    // Emit a barrier payload, or a terminal stop payload for stop coverage.
+    std::unique_ptr<Task> build_task(uint64_t sequence) override
+    {
+        fail_at(0);
+        if (sequence != 0)
+            return nullptr;
+        auto task = std::make_unique<ProbeTask>(*this);
+        task->barrier = true;
+        if (phase_ == 6)
+            task->kind = TaskKind::Stop;
+        return task;
+    }
+    // Count work and exercise failure before the task completion hook.
+    void process_task(size_t,
+                      Task&) override
+    {
+        ++processed;
+        fail_at(1);
+    }
+    // Exercise cleanup when a post-processing worker hook throws.
+    void on_task_done(size_t,
+                      const Task&) override
+    {
+        fail_at(2);
+    }
+    // Observe payload destruction before group publication on ingress.
+    void on_barrier_complete(uint64_t) override
+    {
+        EXPECT_EQ(live.load(), 0U);
+        fail_at(3);
+        ++barriers;
+    }
+    // Check drain on successful EOF, failed processing and cancellation.
+    void on_ingress_manager_done() override
+    {
+        EXPECT_EQ(live.load(), 0U);
+        ++cleanup;
+        fail_at(4);
+    }
+    // Exercise retained failures after a permanent worker terminates.
+    void on_worker_done(size_t) override
+    {
+        fail_at(5);
+    }
+    // Observe nonstandard causes and optionally throw a secondary error.
+    void on_exception(const takt::NodeExceptionContext& context) override
+    {
+        reported_unknown = context.unknown_exception;
+        if (throwing_observer_)
+            throw std::runtime_error("secondary observer failure");
+        Node::on_exception(context);
+    }
+    int phase_;
+    bool unknown_;
+    bool throwing_observer_;
+};
 } // namespace
+
+// Every framework hook retains its original error and drains task payloads.
+TEST(NodeTests,
+     HookFailuresDrainAndPreserveOriginalCause)
+{
+    for (int phase = 0; phase <= 5; ++phase)
+    {
+        LifecycleProbe node(phase, false, phase == 2);
+        node.start();
+        EXPECT_NO_THROW(node.join());
+        ASSERT_NE(node.failure(), nullptr);
+        try
+        {
+            std::rethrow_exception(node.failure());
+        }
+        catch (const std::domain_error& error)
+        {
+            EXPECT_STREQ(error.what(), "original lifecycle failure");
+        }
+        EXPECT_EQ(node.live.load(), 0U);
+        EXPECT_EQ(node.cleanup.load(), 1U);
+        if (phase <= 3)
+            EXPECT_EQ(node.barriers.load(), 0U);
+    }
+}
+
+// Nonstandard failures from ingress and workers use structured diagnostics.
+TEST(NodeTests,
+     NonstandardFailuresRemainObservable)
+{
+    for (int phase : {0, 1})
+    {
+        LifecycleProbe node(phase, true);
+        node.start();
+        node.join();
+        ASSERT_NE(node.failure(), nullptr);
+        EXPECT_TRUE(node.reported_unknown.load());
+        EXPECT_EQ(node.live.load(), 0U);
+        try
+        {
+            std::rethrow_exception(node.failure());
+        }
+        catch (int cause)
+        {
+            EXPECT_EQ(cause, 42);
+        }
+    }
+}
+
+// A stop payload closes admission rather than leaving ingress without workers.
+TEST(NodeTests,
+     StopTaskTerminatesAdmissionWithoutProcessingOrBarrierPublication)
+{
+    LifecycleProbe node(6);
+    node.start();
+    node.join();
+    EXPECT_EQ(node.failure(), nullptr);
+    EXPECT_EQ(node.processed.load(), 0U);
+    EXPECT_EQ(node.barriers.load(), 0U);
+    EXPECT_EQ(node.cleanup.load(), 1U);
+    EXPECT_EQ(node.live.load(), 0U);
+}
 
 // Verifies a single processing worker consumes and transforms pipe frames.
 TEST(NodeTests,

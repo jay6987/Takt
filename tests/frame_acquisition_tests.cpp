@@ -1,4 +1,4 @@
-// Checks framework pipe lifecycle wakeups without adapter-owned stop locks.
+// Checks pipe lifecycle wakeups for ordinary Nodes that acquire in ingress.
 #include <chrono>
 #include <future>
 #include <gtest/gtest.h>
@@ -6,16 +6,17 @@
 
 namespace
 {
-class WaitingFrame final : public takt::FrameTaskNode
+class WaitingNode final : public takt::Node
 {
   public:
     std::shared_ptr<takt::Pipe<int>> input =
-        std::make_shared<takt::Pipe<int>>("waiting-frame");
+        std::make_shared<takt::Pipe<int>>("waiting-node");
     std::promise<void> acquiring;
-    // Register the pipe so Takt can interrupt a blocked acquisition.
-    WaitingFrame()
-        : FrameTaskNode("waiting",
-                        3)
+
+    // Configure the input before ingress blocks on its first task request.
+    WaitingNode()
+        : Node("waiting",
+               3)
     {
         input->set_producer(
             {"source", takt::concurrency(1), takt::frames_per_write(1)}, 0);
@@ -23,60 +24,76 @@ class WaitingFrame final : public takt::FrameTaskNode
                              takt::frames_per_read(1),
                              takt::overlap_frames(0)});
         input->initialize();
-        register_pipe(input);
     }
-    // Framework callbacks must finish before the promise and pipe disappear.
-    ~WaitingFrame() override
+
+    // Stop callbacks before destroying their pipe and promise.
+    ~WaitingNode() override
     {
         request_stop();
         join();
     }
 
-  private:
-    struct Context final : Frame
+  protected:
+    struct ReadTask final : Task
     {
-        takt::Pipe<int>::ReadToken input;
+        takt::Pipe<int>::ReadToken token;
     };
-    // Retain a possible acquired token in the centrally owned frame.
-    std::unique_ptr<Frame> create_frame() override
-    {
-        return std::make_unique<Context>();
-    }
-    // Signal entry, then block on an empty pipe until stop or failure arrives.
-    bool acquire_frame(Frame& frame) override
+
+  private:
+    // Block on the input pipe and retain any acquired token in the task.
+    std::unique_ptr<Task> build_task(uint64_t) override
     {
         acquiring.set_value();
+        auto task = std::make_unique<ReadTask>();
         try
         {
-            static_cast<Context&>(frame).input = input->acquire_read();
-            return true;
+            task->token = input->acquire_read();
+            return task;
         }
         catch (const takt::PipeClosedAndEmptySignal&)
         {
-            return false;
+            return nullptr;
         }
     }
-    // No work is admitted by these interrupted acquisitions.
-    std::unique_ptr<Task> build_frame_task(Frame&,
-                                           uint64_t) override
-    {
-        ADD_FAILURE() << "interrupted acquisition generated a task";
-        return nullptr;
-    }
-    // No worker should execute after an interrupted acquisition.
-    void process_frame_task(size_t,
-                            Frame&,
-                            Task&) override
+
+    // No worker should run after acquisition is interrupted.
+    void process_task(size_t,
+                      Task&) override
     {
         ADD_FAILURE() << "interrupted acquisition reached a worker";
     }
+
+    // Fault-close the owned input while preserving the original exception.
+    void on_exception(const takt::NodeExceptionContext& context) override
+    {
+        if (!input->faulted())
+            input->close_with_error(context.message);
+        Node::on_exception(context);
+    }
+
+  public:
+    // Node cancellation alone does not interrupt an external pipe wait.
+    void request_stop() noexcept override
+    {
+        Node::request_stop();
+        if (input && !input->closed() && !input->faulted())
+        {
+            try
+            {
+                input->close();
+            }
+            catch (...)
+            {
+            }
+        }
+    }
 };
 
-// Stop wakes a pipe read as well as the framework's queue/drain waits.
-TEST(FrameTaskNode,
-     StopWakesBlockedFrameAcquisition)
+// Derived stop closes the pipe so a blocked ingress read wakes promptly.
+TEST(NodeBarrier,
+     StopWakesBlockedTaskAcquisition)
 {
-    WaitingFrame node;
+    WaitingNode node;
     auto ready = node.acquiring.get_future();
     node.start();
     EXPECT_EQ(ready.wait_for(std::chrono::seconds(5)),
@@ -84,14 +101,13 @@ TEST(FrameTaskNode,
     node.request_stop();
     node.join();
     EXPECT_EQ(node.failure(), nullptr);
-    EXPECT_EQ(node.completed_frames(), 0U);
 }
 
-// An explicit upstream fault is not normal EOF and never completes a frame.
-TEST(FrameTaskNode,
-     FaultedAcquisitionRemainsFailureRatherThanEof)
+// An upstream fault remains an error rather than normal end-of-stream.
+TEST(NodeBarrier,
+     FaultedTaskAcquisitionRemainsFailureRatherThanEof)
 {
-    WaitingFrame node;
+    WaitingNode node;
     auto ready = node.acquiring.get_future();
     node.start();
     EXPECT_EQ(ready.wait_for(std::chrono::seconds(5)),
@@ -99,7 +115,6 @@ TEST(FrameTaskNode,
     node.input->close_with_error("upstream failure");
     node.join();
     ASSERT_NE(node.failure(), nullptr);
-    EXPECT_EQ(node.completed_frames(), 0U);
     EXPECT_TRUE(node.input->faulted());
 }
 } // namespace

@@ -18,7 +18,7 @@ add_executable(takt_smoke_test
     pipeline_builder_tests.cpp
     pipe_tests.cpp
     node_tests.cpp
-    frame_task_node_tests.cpp
+    node_barrier_tests.cpp
     frame_acquisition_tests.cpp
     pipeline_contract_tests.cpp
     graphviz_tests.cpp
