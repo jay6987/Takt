@@ -6,6 +6,7 @@
 
 namespace
 {
+/// Waits in ingress until test cancellation closes the observed pipe.
 class WaitingNode final : public takt::Node
 {
   public:
@@ -34,6 +35,7 @@ class WaitingNode final : public takt::Node
     }
 
   protected:
+    /// Retains a read token while ingress is blocked on the input pipe.
     struct ReadTask final : Task
     {
         takt::Pipe<int>::ReadToken token;

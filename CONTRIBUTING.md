@@ -28,6 +28,22 @@ Good contributions include:
   - `.clang-tidy`
   - `.editorconfig`
 
+### Responsibility and file structure
+
+Prefer one principal class per header with its implementation beside it.
+Keep same-level stages consistent: give each concrete example node a named
+class and its own files, even for a small transformation. Closely bound nested
+payloads may stay with their owner. Extract named helpers for meaningful
+behavior instead of hiding it in large callbacks; short local lambdas and
+tests of callback behavior remain appropriate.
+
+`pipeline/node_base.h` owns runtime identity, cancellation and retained failure
+state. `pipeline/node.h` owns worker execution and destruction-aware barriers.
+Structured diagnostics live in `pipeline/node_exception_context.h`.
+Existing includes of `node.h` remain compatible. Keep template definitions
+reachable through their historical aggregate headers when splitting tokens
+or record/replay responsibilities; preserve nested public type identities.
+
 ### Required quality gate
 
 Use LLVM 23 (Clang, clang-format, llvm-cov, llvm-profdata and libclang) and
@@ -45,6 +61,11 @@ branch protection; local hooks alone can be bypassed.
 
 All owned C++ files in `include`, `src`, `tests`, `examples` and `tools` must:
 
+- Contain at most 150 physical lines.
+- Keep each callable body to at most 40 effective lines, counting non-comment
+  tokens and braces while ignoring blank and comment-only lines.
+- Give every defined class and struct a substantive Doxygen description,
+  including nested types and class templates.
 - Keep every physical line at most 80 columns, including comments and literals.
   Tabs count as four-column stops; UTF-8 bytes are counted conservatively.
 - Start with a substantive English responsibility comment.
@@ -56,18 +77,18 @@ All owned C++ files in `include`, `src`, `tests`, `examples` and `tools` must:
   for short signatures. The first may follow the function name. Calls and
   nested function-pointer signatures are not subject to this extra rule.
 
-The shared libclang checker validates all owned files against production,
-example, compile-control and installed-consumer ASTs. Unreachable sources
-fail the complete audit. Formatting is checked with LLVM 23, never silently
-rewritten by the gate. Reviewers must still assess comment accuracy.
+Takt's independent libclang checker validates all owned files against
+production, example, compile-control and installed-consumer ASTs. Parse errors
+and unreachable sources fail the complete audit. The gate runs the full strict
+checks; it does not use the legacy contracts-only option. Formatting is checked
+with LLVM 23, never silently rewritten by the gate. Reviewers must still assess
+comment accuracy.
 
 Production line coverage and branch coverage must **both be >=80%**, compared
 using integer counts without rounding. Tests and tools are not production
 coverage. Every production `.cpp` must appear in the report; difficult code
-is not excluded. Takt and Lynx use the same coverage/contract implementations
-and are evaluated separately, so neither can mask the other's low coverage.
-Lynx retains its additional 400-line file and 60-line body limits; this change
-does not impose those unrelated size limits on Takt.
+is not excluded. The standalone Takt gate is independent of Lynx's checker and
+coverage result.
 
 Coverage, ASan+UBSan and TSan run in separate Debug build directories. Coverage
 uses `-O1`, as in Lynx, while sanitizer builds retain normal Debug settings.
@@ -75,6 +96,8 @@ ASan/UBSan/TSan halt on errors; TSan is never combined with ASan. Standalone
 configuration also exposes `TAKT_COVERAGE=ON` and
 `TAKT_SANITIZER=address-undefined` or `thread`; production builds default to
 uninstrumented. Package smoke tests build **and run** the installed consumer.
+When examples and tests are enabled, CTest also executes every example,
+including both direct and bridged subgraph modes.
 
 The pre-commit hook requires all tracked changes staged and no unrelated
 untracked files, then checks whitespace and the full gate. Work and commits

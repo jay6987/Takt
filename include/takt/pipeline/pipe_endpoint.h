@@ -8,78 +8,12 @@
 #include <string>
 #include <typeinfo>
 
-#include "takt/pipeline/channel.h"
+#include "takt/pipeline/any_pipe_endpoint.h"
 #include "takt/pipeline/pipe.h"
 
 namespace takt
 {
-struct PipeEndpointTypeMismatchError : public std::runtime_error
-{
-    // Carries expected and actual endpoint payload-type diagnostics.
-    explicit PipeEndpointTypeMismatchError(const std::string& message)
-        : std::runtime_error(message)
-    {
-    }
-};
-
-struct AnyPipePacket
-{
-    std::any value;
-    bool is_shot_end = false;
-};
-
-class AnyPipeEndpoint
-{
-  public:
-    // Releases derived endpoint adapters polymorphically.
-    virtual ~AnyPipeEndpoint() = default;
-
-    // Reads a single type-erased frame and its shot-end marker.
-    virtual AnyPipePacket read() = 0;
-    // Writes a checked type-erased frame and its shot-end marker.
-    virtual void write(const AnyPipePacket& packet) = 0;
-    // Closes the backing lifecycle pipe.
-    virtual void close() = 0;
-    // Closes the backing pipe with a diagnostic failure.
-    virtual void close_with_error(std::string message) = 0;
-    // Transfers one frame through the generic read/write interface.
-    virtual void transfer_to(AnyPipeEndpoint& target)
-    {
-        target.write(read());
-    }
-    // Returns the backing pipe's diagnostic name.
-    virtual std::string debug_name() const = 0;
-    // Exposes backing pipe identity for lifecycle and direct-map validation.
-    virtual std::shared_ptr<PipeBase> lifecycle_pipe() const = 0;
-    // Opt in only when sharing a pipe can bypass all endpoint operations.
-    virtual bool supports_direct_to(const AnyPipeEndpoint&) const noexcept
-    {
-        return false;
-    }
-};
-
-// Selects direct transport only for mutually compatible shared-pipe adapters.
-inline MappingTransportInfo classify_mapping(const AnyPipeEndpoint& source,
-                                             const AnyPipeEndpoint& target)
-{
-    const auto source_pipe = source.lifecycle_pipe();
-    const auto target_pipe = target.lifecycle_pipe();
-    if (!source_pipe || !target_pipe)
-        throw std::invalid_argument(
-            "subgraph endpoint lifecycle pipe cannot be null");
-    auto mode = MappingTransport::Bridge;
-    if (source_pipe == target_pipe)
-    {
-        if (!source.supports_direct_to(target) ||
-            !target.supports_direct_to(source))
-            throw std::invalid_argument(
-                "endpoints do not support direct mapping of pipe='" +
-                source_pipe->name() + "'");
-        mode = MappingTransport::Direct;
-    }
-    return {mode, source_pipe->name(), target_pipe->name()};
-}
-
+/// Adapts a typed pipe to type-erased subgraph boundary operations.
 template <typename T> class TypedPipeEndpoint final : public AnyPipeEndpoint
 {
   public:

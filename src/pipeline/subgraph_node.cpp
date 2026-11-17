@@ -25,39 +25,8 @@ SubgraphNode::SubgraphNode(std::string node_name,
       mapping_links_(std::move(bridge_links))
 {
     if (!runtime_)
-    {
         throw std::invalid_argument("subgraph runtime cannot be null");
-    }
-
-    for (const auto& link : mapping_links_)
-    {
-        if (!link.source || !link.target)
-        {
-            throw std::invalid_argument(
-                "subgraph bridge endpoints cannot be null");
-        }
-    }
-
-    const size_t expected_mapping_count =
-        input_port_mappings_.size() + output_port_mappings_.size();
-    if (mapping_links_.size() != expected_mapping_count)
-    {
-        throw std::logic_error(
-            "subgraph mapping link count mismatch: expected=" +
-            std::to_string(expected_mapping_count) +
-            " actual=" + std::to_string(mapping_links_.size()));
-    }
-    for (const auto& link : mapping_links_)
-    {
-        if (classify_mapping(*link.source, *link.target).mode ==
-            MappingTransport::Bridge)
-            bridge_links_.push_back(link);
-    }
-    for (const auto& link : mapping_links_)
-    {
-        runtime_->add_pipe(link.source->lifecycle_pipe());
-        runtime_->add_pipe(link.target->lifecycle_pipe());
-    }
+    configure_mappings();
 }
 
 std::vector<std::shared_ptr<PipelineRuntime>>
@@ -92,23 +61,27 @@ void SubgraphNode::start()
     }
     catch (...)
     {
-        const auto failure = std::current_exception();
-        request_stop();
-        try
-        {
-            join();
-        }
-        catch (const std::exception& cleanup)
-        {
-            error(std::string("subgraph startup cleanup failed: ") +
-                  cleanup.what());
-        }
-        catch (...)
-        {
-            error("subgraph startup cleanup failed: unknown exception");
-        }
-        std::rethrow_exception(failure);
+        handle_start_failure(std::current_exception());
     }
+}
+
+void SubgraphNode::handle_start_failure(std::exception_ptr failure)
+{
+    request_stop();
+    try
+    {
+        join();
+    }
+    catch (const std::exception& cleanup)
+    {
+        error(std::string("subgraph startup cleanup failed: ") +
+              cleanup.what());
+    }
+    catch (...)
+    {
+        error("subgraph startup cleanup failed: unknown exception");
+    }
+    std::rethrow_exception(failure);
 }
 
 void SubgraphNode::join()
@@ -153,42 +126,6 @@ void SubgraphNode::join()
     }
 }
 
-void SubgraphNode::request_stop() noexcept
-{
-    NodeBase::request_stop();
-    bridge_stop_requested_.store(true);
-    for (const auto& link : mapping_links_)
-    {
-        try
-        {
-            link.source->close();
-        }
-        catch (const std::exception& e)
-        {
-            error("pipeline='" + pipeline_name() + "' node='" + name() +
-                  "' failed to close bridge source: " + e.what());
-        }
-        try
-        {
-            link.target->close();
-        }
-        catch (const std::exception& e)
-        {
-            error("pipeline='" + pipeline_name() + "' node='" + name() +
-                  "' failed to close bridge target: " + e.what());
-        }
-    }
-    try
-    {
-        runtime_->request_stop();
-    }
-    catch (const std::exception& e)
-    {
-        error("pipeline='" + pipeline_name() + "' node='" + name() +
-              "' failed to stop inner runtime: " + e.what());
-    }
-}
-
 const std::unordered_map<std::string,
                          NodePortRef>&
 SubgraphNode::input_port_mappings() const noexcept
@@ -203,60 +140,4 @@ SubgraphNode::output_port_mappings() const noexcept
     return output_port_mappings_;
 }
 
-void SubgraphNode::run_bridge(size_t index)
-{
-    auto& link = bridge_links_[index];
-    while (!bridge_stop_requested_.load())
-    {
-        try
-        {
-            link.source->transfer_to(*link.target);
-        }
-        catch (const PipeClosedAndEmptySignal&)
-        {
-            link.target->close();
-            break;
-        }
-        catch (const std::exception& e)
-        {
-            const std::string message =
-                "pipeline='" + pipeline_name() + "' node='" + name() +
-                "' edge='" + link.source_label + "->" + link.target_label +
-                "' stop_reason='bridge_exception' exception_summary='" +
-                e.what() + "'";
-            {
-                std::lock_guard<std::mutex> lk(bridge_error_mutex_);
-                if (!has_bridge_error_)
-                {
-                    has_bridge_error_ = true;
-                    bridge_error_message_ = message;
-                }
-            }
-            error(message);
-            link.source->close_with_error(message);
-            link.target->close_with_error(message);
-            break;
-        }
-        catch (...)
-        {
-            const std::string message =
-                "pipeline='" + pipeline_name() + "' node='" + name() +
-                "' edge='" + link.source_label + "->" + link.target_label +
-                "' stop_reason='bridge_exception' "
-                "exception_summary='unknown exception'";
-            {
-                std::lock_guard<std::mutex> lk(bridge_error_mutex_);
-                if (!has_bridge_error_)
-                {
-                    has_bridge_error_ = true;
-                    bridge_error_message_ = message;
-                }
-            }
-            error(message);
-            link.source->close_with_error(message);
-            link.target->close_with_error(message);
-            break;
-        }
-    }
-}
 } // namespace takt

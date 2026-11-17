@@ -15,6 +15,7 @@ enum class PortDirection
     Output,
 };
 
+/// Named input or output port and its descriptive metadata.
 struct PortSpec
 {
     std::string name;
@@ -22,6 +23,7 @@ struct PortSpec
     PipeDescriptor descriptor;
 };
 
+/// Declared graph node with its metadata and boundary ports.
 struct NodeSpec
 {
     std::string name;
@@ -30,6 +32,7 @@ struct NodeSpec
     std::vector<PortSpec> output_ports;
 };
 
+/// Directed graph connection between two named ports.
 struct EdgeSpec
 {
     std::string name;
@@ -40,6 +43,7 @@ struct EdgeSpec
     PipeDescriptor descriptor;
 };
 
+/// Identifies a port on a named graph node.
 struct NodePortRef
 {
     std::string node_name;
@@ -53,6 +57,7 @@ enum class MappingTransport
     Bridge,
 };
 
+/// Describes how a subgraph boundary mapping transfers frames.
 struct MappingTransportInfo
 {
     MappingTransport mode = MappingTransport::Unresolved;

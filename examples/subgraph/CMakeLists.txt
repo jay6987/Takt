@@ -1,5 +1,6 @@
 add_executable(takt_subgraph_example
     main.cpp
+    double_node.cpp
 )
 takt_warnings(takt_subgraph_example)
 

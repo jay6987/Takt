@@ -1,184 +1,18 @@
-// Implements replaceable console logging and platform-specific wide conversion.
+// Owns and dispatches to the replaceable process-wide logger.
 #include "takt/logging/logger.h"
 
-#include <chrono>
-#include <ctime>
-#include <cwchar>
-#include <iomanip>
-#include <iostream>
+#include "default_logger.h"
+
 #include <memory>
 #include <mutex>
-#include <sstream>
-#include <vector>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include <utility>
 
 namespace takt
 {
 namespace
 {
-class DefaultLogger final : public ILogger
-{
-  public:
-    // Serializes undecorated narrow console messages.
-    void display(const std::string& message) override
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        std::cout << message << std::endl;
-    }
-
-    // Serializes undecorated wide console messages.
-    void display(const std::wstring& message) override
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        std::wcout << message << std::endl;
-    }
-
-    // Emits a timestamped narrow informational message.
-    void info(const std::string& message) override
-    {
-        write("INFO", message);
-    }
-    // Converts and emits a wide informational message.
-    void info(const std::wstring& message) override
-    {
-        write("INFO", to_utf8(message));
-    }
-    // Emits a timestamped narrow warning.
-    void warn(const std::string& message) override
-    {
-        write("WARN", message);
-    }
-    // Converts and emits a wide warning.
-    void warn(const std::wstring& message) override
-    {
-        write("WARN", to_utf8(message));
-    }
-    // Emits a timestamped narrow error.
-    void error(const std::string& message) override
-    {
-        write("ERROR", message);
-    }
-    // Converts and emits a wide error.
-    void error(const std::wstring& message) override
-    {
-        write("ERROR", to_utf8(message));
-    }
-    // Emits a narrow debug message only when debug output is enabled.
-    void debug(const std::string& message) override
-    {
-        if (debug_enabled_)
-        {
-            write("DEBUG", message);
-        }
-    }
-
-    // Converts and emits a wide message only when debug output is enabled.
-    void debug(const std::wstring& message) override
-    {
-        if (debug_enabled_)
-        {
-            write("DEBUG", to_utf8(message));
-        }
-    }
-
-    // Returns the default logger's debug-output policy.
-    bool debug_enabled() const override
-    {
-        return debug_enabled_;
-    }
-
-    // Updates the default logger's debug-output policy.
-    void set_debug(bool enabled)
-    {
-        debug_enabled_ = enabled;
-    }
-
-  private:
-    // Formats local wall-clock time for message decoration.
-    static std::string now_string()
-    {
-        const auto now = std::chrono::system_clock::now();
-        const auto t = std::chrono::system_clock::to_time_t(now);
-
-        std::tm tm_buf{};
-#ifdef _WIN32
-        localtime_s(&tm_buf, &t);
-#else
-        localtime_r(&t, &tm_buf);
-#endif
-
-        std::ostringstream oss;
-        oss << std::put_time(&tm_buf, "%H:%M:%S");
-        return oss.str();
-    }
-
-    // Converts wide messages using the platform's existing conversion policy.
-    static std::string to_utf8(const std::wstring& w)
-    {
-        if (w.empty())
-        {
-            return {};
-        }
-
-#ifdef _WIN32
-        const int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
-                                            static_cast<int>(w.size()), nullptr,
-                                            0, nullptr, nullptr);
-        if (len <= 0)
-        {
-            return "[wstring-convert-failed]";
-        }
-
-        std::string buffer(static_cast<size_t>(len), '\0');
-        const int written = WideCharToMultiByte(
-            CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), buffer.data(),
-            len, nullptr, nullptr);
-        if (written <= 0)
-        {
-            return "[wstring-convert-failed]";
-        }
-        return buffer;
-#else
-        std::mbstate_t state{};
-        const wchar_t* src = w.c_str();
-        const size_t len = std::wcsrtombs(nullptr, &src, 0, &state);
-        if (len == static_cast<size_t>(-1))
-        {
-            return "[wstring-convert-failed]";
-        }
-
-        std::vector<char> buffer(len + 1, '\0');
-        state = std::mbstate_t{};
-        src = w.c_str();
-        std::wcsrtombs(buffer.data(), &src, buffer.size(), &state);
-        return std::string(buffer.data());
-#endif
-    }
-
-    // Serializes decorated output to avoid interleaving console messages.
-    void write(const char* level,
-               const std::string& message)
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        std::cout << "[" << now_string() << "] " << level << " " << message
-                  << std::endl;
-    }
-
-    std::mutex mu_;
-    bool debug_enabled_ = false;
-};
-
 std::mutex g_mu;
-std::shared_ptr<ILogger> g_logger = std::make_shared<DefaultLogger>();
-
-// Returns the current default logger if a custom logger has not replaced it.
-DefaultLogger* get_default_logger()
-{
-    return dynamic_cast<DefaultLogger*>(g_logger.get());
-}
+std::shared_ptr<ILogger> g_logger = std::make_shared<detail::DefaultLogger>();
 } // namespace
 
 std::shared_ptr<ILogger> get_logger()
@@ -190,10 +24,7 @@ std::shared_ptr<ILogger> get_logger()
 void set_logger(std::shared_ptr<ILogger> logger)
 {
     if (!logger)
-    {
         return;
-    }
-
     std::lock_guard<std::mutex> lk(g_mu);
     g_logger = std::move(logger);
 }
@@ -201,16 +32,14 @@ void set_logger(std::shared_ptr<ILogger> logger)
 void reset_logger()
 {
     std::lock_guard<std::mutex> lk(g_mu);
-    g_logger = std::make_shared<DefaultLogger>();
+    g_logger = std::make_shared<detail::DefaultLogger>();
 }
 
 void set_debug_enabled(bool enabled)
 {
     std::lock_guard<std::mutex> lk(g_mu);
-    if (auto* logger = get_default_logger())
-    {
+    if (auto* logger = dynamic_cast<detail::DefaultLogger*>(g_logger.get()))
         logger->set_debug(enabled);
-    }
 }
 
 void display(const std::string& message)

@@ -9,6 +9,7 @@
 
 namespace
 {
+/// Captures console output while restoring the process-wide logger.
 class ConsoleCapture
 {
   public:
@@ -40,6 +41,14 @@ class ConsoleCapture
     std::streambuf* narrow_buffer_;
     std::wstreambuf* wide_buffer_;
 };
+
+// Confirms reset restores an independent default logger with debug disabled.
+void verify_logger_reset(const std::shared_ptr<takt::ILogger>& original)
+{
+    takt::reset_logger();
+    EXPECT_NE(takt::get_logger(), original);
+    EXPECT_FALSE(takt::get_logger()->debug_enabled());
+}
 } // namespace
 
 // Verifies default narrow/wide dispatch and debug enable/disable transitions.
@@ -85,7 +94,5 @@ TEST(Logging,
     EXPECT_FALSE(original->debug_enabled());
     takt::debug("hidden-again");
     EXPECT_EQ(capture.narrow.str(), output);
-    takt::reset_logger();
-    EXPECT_NE(takt::get_logger(), original);
-    EXPECT_FALSE(takt::get_logger()->debug_enabled());
+    verify_logger_reset(original);
 }

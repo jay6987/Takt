@@ -5,68 +5,15 @@
 #include <cstddef>
 #include <deque>
 #include <mutex>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "takt/pipeline/pipe_errors.h"
+#include "takt/pipeline/pipe_windows.h"
+
 namespace takt
 {
-struct PipeClosedAndEmptySignal : public std::runtime_error
-{
-    // Signals normal completion after a closed pipe has been drained.
-    PipeClosedAndEmptySignal() : std::runtime_error("pipe is closed and empty")
-    {
-    }
-};
-
-struct PipeUnterminatedShotError : public std::runtime_error
-{
-    // Carries diagnostic context for closure without a shot-end marker.
-    explicit PipeUnterminatedShotError(const std::string& message)
-        : std::runtime_error(message)
-    {
-    }
-};
-
-struct PipeFaultedError : public std::runtime_error
-{
-    // Carries the pipe's terminal failure message.
-    explicit PipeFaultedError(const std::string& message)
-        : std::runtime_error(message)
-    {
-    }
-};
-
-struct PipeWriteAbandonedError : public PipeFaultedError
-{
-    // Identifies a cancelled write that blocks ordered publication.
-    explicit PipeWriteAbandonedError(const std::string& message)
-        : PipeFaultedError(message)
-    {
-    }
-};
-
-struct PipeCoreWriteReservation
-{
-    size_t token_id = 0;
-    size_t start_frame_index = 0;
-    bool is_shot_start = false;
-    bool is_shot_end = false;
-    std::vector<size_t> slots;
-};
-
-struct PipeCoreFrameWindow
-{
-    size_t token_id = 0;
-    size_t start_frame_index = 0;
-    bool is_shot_start = false;
-    bool is_shot_end = false;
-    std::vector<size_t> slots;
-    size_t frame_count = 0;
-    size_t overlap_frames = 0;
-    size_t new_frame_count = 0;
-};
-
+/// Synchronizes bounded storage, ordered publication and read reclamation.
 class PipeCore
 {
   public:
@@ -113,6 +60,7 @@ class PipeCore
     void release_read_window(size_t token_id);
 
   private:
+    /// Bookkeeping for a producer reservation awaiting ordered publication.
     struct PendingWrite
     {
         size_t token_id = 0;
@@ -124,6 +72,7 @@ class PipeCore
         bool published = false;
     };
 
+    /// Bookkeeping for a consumer window awaiting ordered reclamation.
     struct PendingRead
     {
         size_t token_id = 0;
@@ -150,6 +99,25 @@ class PipeCore
     PendingWrite& find_write_locked(size_t token_id);
     // Looks up a pending read or rejects an unknown token.
     PendingRead& find_read_locked(size_t token_id);
+    // Checks that the requested read window can use configured retention.
+    void validate_read(size_t frames_per_read,
+                       size_t overlap_frames) const;
+    // Finds the current shot-bounded window start.
+    size_t read_start_locked(size_t overlap_frames) const;
+    // Finds the visible end of a proposed read window.
+    size_t read_end_locked(size_t start,
+                           size_t wanted) const;
+    // Reports whether a complete or terminal read window is available.
+    bool read_ready_locked(size_t frames_per_read,
+                           size_t overlap_frames) const;
+    // Claims an available read window with the mutex held.
+    PipeCoreFrameWindow claim_read_locked(size_t frames_per_read,
+                                          size_t overlap_frames);
+    // Checks producer batch limits.
+    void validate_write(size_t frame_count) const;
+    // Claims a producer batch with the mutex held.
+    PipeCoreWriteReservation claim_write_locked(size_t frame_count,
+                                                bool is_shot_end);
 
     std::string name_;
     const size_t slot_capacity_;

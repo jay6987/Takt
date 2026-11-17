@@ -6,6 +6,7 @@
 
 namespace takt
 {
+/// Interface for process-wide severity-aware and undecorated logging.
 class ILogger
 {
   public:

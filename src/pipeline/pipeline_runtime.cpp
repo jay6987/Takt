@@ -1,9 +1,7 @@
 // Initializes runtime trees and propagates lifecycle failures across nodes.
 #include "takt/pipeline/pipeline_runtime.h"
 
-#include <algorithm>
 #include <stdexcept>
-#include <unordered_set>
 #include <utility>
 
 #include "takt/logging/logger.h"
@@ -39,80 +37,6 @@ bool PipelineRuntime::initialized() const noexcept
     return state_ == State::Initialized || state_ == State::Started;
 }
 
-void PipelineRuntime::collect_tree(
-    std::vector<PipelineRuntime*>& runtimes,
-    std::vector<std::shared_ptr<PipeBase>>& pipes)
-{
-    if (std::find(runtimes.begin(), runtimes.end(), this) != runtimes.end())
-        throw std::logic_error(
-            "runtime tree contains a cycle or shared subgraph");
-    if (state_ == State::Started || state_ == State::Failed ||
-        state_ == State::Stopped)
-        throw std::logic_error("runtime is not available for initialization");
-    runtimes.push_back(this);
-    pipes.insert(pipes.end(), pipes_.begin(), pipes_.end());
-    std::unordered_set<NodeBase*> nodes;
-    for (const auto& node : nodes_)
-    {
-        if (!nodes.insert(node.get()).second)
-            throw std::logic_error("runtime contains duplicate node ownership");
-        for (const auto& child : node->child_runtimes())
-        {
-            if (!child)
-                throw std::logic_error("subgraph runtime cannot be null");
-            child->collect_tree(runtimes, pipes);
-        }
-    }
-}
-
-void PipelineRuntime::initialize()
-{
-    if (state_ != State::Created)
-        throw std::logic_error("runtime initialization is one-shot");
-    std::vector<PipelineRuntime*> runtimes;
-    std::vector<std::shared_ptr<PipeBase>> pipes;
-    try
-    {
-        collect_tree(runtimes, pipes);
-        std::unordered_set<NodeBase*> nodes;
-        for (const auto* runtime : runtimes)
-            for (const auto& node : runtime->nodes_)
-                if (!nodes.insert(node.get()).second)
-                    throw std::logic_error(
-                        "node is shared by multiple runtimes");
-        std::unordered_set<PipeBase*> seen;
-        std::vector<std::shared_ptr<PipeBase>> unique;
-        for (const auto& pipe : pipes)
-        {
-            if (!seen.insert(pipe.get()).second)
-                continue;
-            if (pipe->closed() || pipe->faulted())
-                throw std::logic_error(
-                    "pipe='" + pipe->name() +
-                    "': terminal pipe cannot initialize a runtime");
-            if (!pipe->initialized())
-                pipe->validate_configuration();
-            unique.push_back(pipe);
-        }
-        for (const auto& pipe : unique)
-            if (!pipe->initialized())
-                pipe->initialize();
-        for (auto* runtime : runtimes)
-            runtime->state_ = State::Initialized;
-    }
-    catch (...)
-    {
-        initialization_failure_ = std::current_exception();
-        state_ = State::Failed;
-        for (auto* runtime : runtimes)
-        {
-            runtime->initialization_failure_ = initialization_failure_;
-            runtime->state_ = State::Failed;
-        }
-        throw;
-    }
-}
-
 void PipelineRuntime::start()
 {
     if (state_ == State::Failed && initialization_failure_)
@@ -123,6 +47,21 @@ void PipelineRuntime::start()
     }
     if (state_ != State::Initialized)
         throw std::logic_error("runtime must be initialized before start");
+    validate_start();
+    try
+    {
+        for (auto& node : nodes_)
+            node->start();
+        state_ = State::Started;
+    }
+    catch (...)
+    {
+        handle_start_failure(std::current_exception());
+    }
+}
+
+void PipelineRuntime::validate_start()
+{
     std::vector<PipelineRuntime*> runtimes;
     std::vector<std::shared_ptr<PipeBase>> pipes;
     collect_tree(runtimes, pipes);
@@ -134,33 +73,27 @@ void PipelineRuntime::start()
         if (!pipe->initialized())
             throw std::logic_error("pipe='" + pipe->name() +
                                    "': pipe is not initialized");
+}
+
+void PipelineRuntime::handle_start_failure(std::exception_ptr failure)
+{
+    state_ = State::Failed;
+    initialization_failure_ = failure;
+    request_stop();
     try
     {
-        for (auto& node : nodes_)
-            node->start();
-        state_ = State::Started;
+        join();
+    }
+    catch (const std::exception& cleanup)
+    {
+        takt::error(std::string("runtime startup cleanup failed: ") +
+                    cleanup.what());
     }
     catch (...)
     {
-        const auto error = std::current_exception();
-        state_ = State::Failed;
-        initialization_failure_ = error;
-        request_stop();
-        try
-        {
-            join();
-        }
-        catch (const std::exception& cleanup)
-        {
-            takt::error(std::string("runtime startup cleanup failed: ") +
-                        cleanup.what());
-        }
-        catch (...)
-        {
-            takt::error("runtime startup cleanup failed: unknown exception");
-        }
-        std::rethrow_exception(error);
+        takt::error("runtime startup cleanup failed: unknown exception");
     }
+    std::rethrow_exception(failure);
 }
 
 void PipelineRuntime::join()

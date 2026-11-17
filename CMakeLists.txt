@@ -58,14 +58,46 @@ endif()
 
 add_library(takt STATIC
     src/recordreplay/recordreplay.cpp
+    src/recordreplay/record_bindings.cpp
+    src/recordreplay/record_cleanup.cpp
+    src/recordreplay/replay_slots.cpp
     src/logging/global_logger.cpp
+    src/logging/default_logger.cpp
+    src/logging/logger_format.cpp
     src/pipeline/node.cpp
+    src/pipeline/node_base.cpp
     src/pipeline/node_dispatch.cpp
+    src/pipeline/node_exception.cpp
+    src/pipeline/node_failure.cpp
+    src/pipeline/node_ingress.cpp
+    src/pipeline/node_worker.cpp
     src/pipeline/subgraph_node.cpp
+    src/pipeline/subgraph_bridge.cpp
+    src/pipeline/subgraph_mappings.cpp
     src/pipeline/pipeline_builder.cpp
+    src/pipeline/builder_lookup.cpp
+    src/pipeline/builder_bridges.cpp
+    src/pipeline/builder_validation.cpp
+    src/pipeline/builder_ports.cpp
+    src/pipeline/builder_connections.cpp
+    src/pipeline/builder_subgraph.cpp
+    src/pipeline/builder_queries.cpp
+    src/pipeline/builder_runtime.cpp
     src/pipeline/pipeline_runtime.cpp
+    src/pipeline/runtime_initialization.cpp
+    src/pipeline/pipe_base.cpp
     src/pipeline/pipe_core.cpp
+    src/pipeline/pipe_core_write.cpp
+    src/pipeline/pipe_core_read.cpp
+    src/pipeline/pipe_core_slots.cpp
+    src/pipeline/pipe_core_release.cpp
     src/pipeline/graphviz.cpp
+    src/pipeline/graphviz_validation.cpp
+    src/pipeline/graphviz_helpers.cpp
+    src/pipeline/graphviz_endpoint.cpp
+    src/pipeline/graphviz_ports.cpp
+    src/pipeline/graphviz_mapping.cpp
+    src/pipeline/graphviz_render.cpp
 )
 
 add_library(takt::takt ALIAS takt)

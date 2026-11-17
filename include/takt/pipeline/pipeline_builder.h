@@ -14,6 +14,7 @@ namespace takt
 class NodeBase;
 class PipelineRuntime;
 
+/// Shared handle for declaring, validating and binding a pipeline topology.
 class PipelineBuilder
 {
   public:

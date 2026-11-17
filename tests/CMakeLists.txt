@@ -14,15 +14,52 @@ add_executable(takt_smoke_test
     logging_tests.cpp
     pipe_config_tests.cpp
     pipe_lifecycle_tests.cpp
+    pipe_initialization_tests.cpp
+    pipe_configuration_validation_tests.cpp
+    pipe_read_window_tests.cpp
     runtime_initialization_tests.cpp
+    runtime_startup_cleanup_tests.cpp
+    runtime_pipe_preparation_tests.cpp
     pipeline_builder_tests.cpp
+    pipeline_builder_runtime_tests.cpp
+    pipeline_builder_subgraph_tests.cpp
+    pipeline_builder_bridge_flow_tests.cpp
+    pipeline_builder_bridge_lifecycle_tests.cpp
     pipe_tests.cpp
+    pipe_overlap_tests.cpp
+    pipe_shot_boundary_tests.cpp
+    pipe_record_codec_tests.cpp
+    pipe_stale_binding_tests.cpp
+    pipe_binding_exclusivity_tests.cpp
+    pipe_binding_move_tests.cpp
+    pipe_replay_move_failure_tests.cpp
+    pipe_scope_and_publication_tests.cpp
+    pipe_blocking_tests.cpp
+    pipe_concurrent_integrity_tests.cpp
+    pipe_concurrency_stress_tests.cpp
     node_tests.cpp
+    node_worker_diagnostics_tests.cpp
+    node_pipeline_tests.cpp
+    node_subgraph_stop_tests.cpp
     node_barrier_tests.cpp
+    node_barrier_ordering_tests.cpp
+    node_barrier_vector_tests.cpp
+    node_barrier_group_fixture.cpp
+    node_barrier_group_execution.cpp
+    node_barrier_vector_fixture.cpp
+    node_barrier_vector_execution.cpp
     frame_acquisition_tests.cpp
     pipeline_contract_tests.cpp
+    pipeline_drain_contract_tests.cpp
+    pipeline_admission_tests.cpp
+    pipeline_frame_ownership_tests.cpp
     graphviz_tests.cpp
+    graphviz_boundary_tests.cpp
+    graphviz_transport_tests.cpp
     subgraph_direct_tests.cpp
+    subgraph_mapping_transfer_tests.cpp
+    subgraph_direct_lifecycle_tests.cpp
+    subgraph_direct_cancellation_tests.cpp
 )
 
 target_link_libraries(takt_smoke_test
@@ -33,6 +70,21 @@ target_link_libraries(takt_smoke_test
 
 gtest_discover_tests(takt_smoke_test)
 takt_warnings(takt_smoke_test)
+
+if(TAKT_BUILD_EXAMPLES)
+    set(example_working_directory "${CMAKE_CURRENT_BINARY_DIR}/example-smoke")
+    file(MAKE_DIRECTORY "${example_working_directory}")
+    foreach(example IN ITEMS basic pipe recordreplay node subgraph)
+        add_test(NAME "TaktExample_${example}"
+            COMMAND "$<TARGET_FILE:takt_${example}_example>")
+        set_tests_properties("TaktExample_${example}" PROPERTIES
+            WORKING_DIRECTORY "${example_working_directory}" TIMEOUT 30)
+    endforeach()
+    add_test(NAME TaktExample_subgraph_bridge
+        COMMAND "$<TARGET_FILE:takt_subgraph_example>" bridge)
+    set_tests_properties(TaktExample_subgraph_bridge PROPERTIES
+        WORKING_DIRECTORY "${example_working_directory}" TIMEOUT 30)
+endif()
 
 if(TAKT_BUILD_QUALITY_TOOLS)
     add_library(takt_compile_controls OBJECT

@@ -1,8 +1,6 @@
 // Validates common pipe configuration and enforces initialization boundaries.
 #pragma once
 
-#include <algorithm>
-#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -11,6 +9,7 @@
 
 namespace takt
 {
+/// Common configuration, lifecycle and capacity rules for typed pipes.
 class PipeBase
 {
   public:
@@ -57,27 +56,10 @@ class PipeBase
     virtual void validate_configuration() const = 0;
 
     // Sets valid read batching and overlap before initialization.
-    void set_consumer(ConsumerConfig config)
-    {
-        require_configuring();
-        if (consumer_)
-            fail("consumer is already configured");
-        if (config.concurrency == 0 || config.frames_per_read == 0 ||
-            config.overlap_frames >= config.frames_per_read)
-            throw std::invalid_argument(
-                context("invalid consumer configuration"));
-        consumer_ = std::move(config);
-    }
+    void set_consumer(ConsumerConfig config);
 
     // Overrides inferred capacity with a nonzero explicit frame-slot count.
-    void set_slot_capacity(size_t slot_capacity)
-    {
-        require_configuring();
-        if (slot_capacity == 0)
-            throw std::invalid_argument(
-                context("slot capacity cannot be zero"));
-        explicit_slot_capacity_ = slot_capacity;
-    }
+    void set_slot_capacity(size_t slot_capacity);
 
     // Selects capacity sufficient for simultaneous producer/consumer demand.
     void request_max_concurrency()
@@ -103,22 +85,7 @@ class PipeBase
     }
 
     // Computes required slots with checked arithmetic unless overridden.
-    size_t slot_capacity() const
-    {
-        if (explicit_slot_capacity_)
-            return *explicit_slot_capacity_;
-        const auto& producer = producer_config();
-        const auto& consumer = consumer_config();
-        const auto write_slot_demand =
-            multiply(producer.concurrency, producer.frames_per_write);
-        const auto read_slot_demand =
-            add(multiply(consumer.concurrency,
-                         consumer.frames_per_read - consumer.overlap_frames),
-                consumer.overlap_frames);
-        return policy_ == BufferPolicy::Minimal
-                   ? std::max(write_slot_demand, read_slot_demand)
-                   : add(write_slot_demand, read_slot_demand);
-    }
+    size_t slot_capacity() const;
 
   protected:
     // Rejects configuration changes after initialization or cancellation.
@@ -147,16 +114,7 @@ class PipeBase
     }
 
     // Installs valid producer batching exactly once during configuration.
-    void set_producer_config(ProducerConfig config)
-    {
-        require_configuring();
-        if (producer_)
-            fail("producer is already configured");
-        if (config.concurrency == 0 || config.frames_per_write == 0)
-            throw std::invalid_argument(
-                context("invalid producer configuration"));
-        producer_ = std::move(config);
-    }
+    void set_producer_config(ProducerConfig config);
 
     // Prefixes a diagnostic with the pipe identity.
     std::string context(const std::string& message) const
@@ -176,23 +134,11 @@ class PipeBase
   private:
     // Multiplies capacity demands without unsigned overflow.
     size_t multiply(size_t a,
-                    size_t b) const
-    {
-        if (b != 0 && a > std::numeric_limits<size_t>::max() / b)
-            throw std::overflow_error(
-                context("slot capacity multiplication overflow"));
-        return a * b;
-    }
+                    size_t b) const;
 
     // Adds capacity demands without unsigned overflow.
     size_t add(size_t a,
-               size_t b) const
-    {
-        if (a > std::numeric_limits<size_t>::max() - b)
-            throw std::overflow_error(
-                context("slot capacity addition overflow"));
-        return a + b;
-    }
+               size_t b) const;
 
     std::string name_;
     std::optional<ProducerConfig> producer_;

@@ -25,10 +25,27 @@ foreach(tool IN ITEMS clang++ clang-format llvm-cov llvm-profdata)
     endif()
 endforeach()
 find_program(ctest NAMES ctest REQUIRED)
-file(GLOB_RECURSE sources LIST_DIRECTORIES false
-    "${root}/include/*.h" "${root}/src/*.cpp"
-    "${root}/tests/*.cpp" "${root}/tests/*.h"
-    "${root}/examples/*.cpp" "${root}/tools/*.cpp" "${root}/tools/*.h")
+set(platform_compilers)
+if(CMAKE_HOST_APPLE)
+    find_program(xcrun NAMES xcrun REQUIRED)
+    execute_process(COMMAND "${xcrun}" --sdk macosx --show-sdk-path
+        RESULT_VARIABLE sdk_result OUTPUT_VARIABLE macos_sdk
+        ERROR_VARIABLE sdk_error OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT sdk_result STREQUAL "0" OR NOT IS_DIRECTORY "${macos_sdk}")
+        message(FATAL_ERROR "Cannot resolve macOS SDK: ${sdk_error}")
+    endif()
+    list(APPEND platform_compilers "-DCMAKE_OSX_SYSROOT=${macos_sdk}")
+endif()
+set(sources)
+foreach(directory IN ITEMS include src tests examples tools)
+    foreach(extension IN ITEMS
+        cpp cc cxx c++ C h hh hpp hxx ipp tpp inl mm)
+        file(GLOB_RECURSE found LIST_DIRECTORIES false
+            "${root}/${directory}/*.${extension}")
+        list(APPEND sources ${found})
+    endforeach()
+endforeach()
+list(REMOVE_DUPLICATES sources)
 foreach(source IN LISTS sources)
     run("${clang_format}" --dry-run --Werror "${source}")
 endforeach()
@@ -41,15 +58,12 @@ set(build "${root}/build/quality")
 set(ENV{LLVM_PROFILE_FILE} "${build}/control-%p.profraw")
 run("${CMAKE_COMMAND}" -S "${root}" -B "${build}"
     "-DCMAKE_CXX_COMPILER=${clangxx}" -DCMAKE_BUILD_TYPE=Debug
+    ${platform_compilers}
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     -DTAKT_BUILD_TESTS=ON -DTAKT_BUILD_EXAMPLES=ON
     -DTAKT_BUILD_QUALITY_TOOLS=ON -DTAKT_WARNINGS_AS_ERRORS=ON
     -DTAKT_COVERAGE=ON -DTAKT_SANITIZER=none ${dependencies})
 run("${CMAKE_COMMAND}" --build "${build}" --parallel)
-run("${CMAKE_COMMAND}" "-DCHECKER=${build}/takt_source_policy"
-    "-DCLANG=${clangxx}" "-DFORMATTER=${clang_format}"
-    -P "${root}/tests/quality/source_contracts_test.cmake")
-run("${CMAKE_COMMAND}" -P "${root}/tests/quality/checks_test.cmake")
 file(REMOVE_RECURSE "${build}/profiles")
 file(MAKE_DIRECTORY "${build}/profiles")
 run("${CMAKE_COMMAND}" -E env
@@ -57,7 +71,7 @@ run("${CMAKE_COMMAND}" -E env
     "${ctest}" --test-dir "${build}" --output-on-failure --timeout 60)
 set(consumer "${build}/tests/package-consumer-smoke/consumer")
 run("${build}/takt_source_policy" "${build}" "${root}"
-    --complete "${consumer}" --contracts-only)
+    --complete "${consumer}")
 file(GLOB profiles "${build}/profiles/*.profraw")
 if(NOT profiles)
     message(FATAL_ERROR "No instrumentation profiles were produced")
@@ -88,6 +102,7 @@ foreach(kind IN ITEMS address-undefined thread)
     set(sanitizer_build "${root}/build/${kind}")
     run("${CMAKE_COMMAND}" -S "${root}" -B "${sanitizer_build}"
         "-DCMAKE_CXX_COMPILER=${clangxx}" -DCMAKE_BUILD_TYPE=Debug
+        ${platform_compilers}
         -DTAKT_BUILD_TESTS=ON -DTAKT_BUILD_EXAMPLES=ON
         -DTAKT_BUILD_QUALITY_TOOLS=OFF -DTAKT_WARNINGS_AS_ERRORS=ON
         -DTAKT_COVERAGE=OFF "-DTAKT_SANITIZER=${kind}" ${dependencies})

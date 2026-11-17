@@ -6,6 +6,8 @@
 #include "takt/logging/logger.h"
 #include "takt/pipeline/channel.h"
 #include "takt/pipeline/node.h"
+#include "takt/pipeline/node_base.h"
+#include "takt/pipeline/node_exception_context.h"
 #include "takt/pipeline/pipe.h"
 #include "takt/pipeline/pipe_base.h"
 #include "takt/pipeline/pipe_config.h"

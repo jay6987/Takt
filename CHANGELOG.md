@@ -34,6 +34,14 @@ This project follows Semantic Versioning.
 - Bounded node task admission and first-failure inspection; runtime join reports node failures after joining all nodes.
 
 ### Changed
+- Enforce 150 physical lines per owned C++ file, 40 effective lines per
+  callable body, and Doxygen responsibility descriptions for defined types.
+  The independent strict audit covers library code, examples, tests and tools.
+- Separate `NodeBase`, `Node` and exception context headers, and organize
+  pipes, record/replay, runtime, graph export and tests by responsibility.
+  Existing aggregate includes and nested public token/task types remain
+  compatible; the library still supports C++17.
+- Run all example programs in CTest, including direct and bridged subgraphs.
 - **Breaking:** Removed `FrameTaskNode`. Grouped work now uses ordinary
   `Node` tasks marked with `Task::barrier` and the ingress-only
   `on_barrier_complete(sequence_id)` hook. Keep frame context and move-only

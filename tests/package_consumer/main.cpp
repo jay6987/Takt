@@ -8,6 +8,7 @@
 #error "The installed package must not expose FrameTaskNode"
 #endif
 
+/// Exercises empty barrier groups through the installed public Node API.
 class InstalledBarrier final : public takt::Node
 {
   public:

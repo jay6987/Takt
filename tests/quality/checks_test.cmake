@@ -11,7 +11,7 @@ function(expect_failure script)
     endif()
 endfunction()
 
-string(REPEAT "\n" 400 valid)
+string(REPEAT "\n" 150 valid)
 file(WRITE "${scratch}/size.h" "${valid}")
 check_source_size("${scratch}/size.h")
 file(APPEND "${scratch}/size.h" "x")

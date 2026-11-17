@@ -15,6 +15,7 @@ enum class DotView
     Interfaces,
 };
 
+/// Controls the orientation, expansion and presentation of DOT output.
 struct DotOptions
 {
     bool expand_subgraphs = true;
@@ -22,8 +23,7 @@ struct DotOptions
     DotView view = DotView::Connections;
 };
 
-// Value-owned topology only: descriptors and runtime objects are not
-// serialized.
+/// Value-owned topology; descriptors and runtime objects are not serialized.
 struct PipelineGraph
 {
     std::string name;

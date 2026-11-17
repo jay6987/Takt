@@ -13,6 +13,7 @@ enum class BufferPolicy
     MaxConcurrency,
 };
 
+/// Explicit endpoint worker count.
 struct Concurrency
 {
     // Wraps an explicit endpoint concurrency count without implicit conversion.
@@ -20,6 +21,7 @@ struct Concurrency
     size_t value;
 };
 
+/// Explicit producer batch size.
 struct FramesPerWrite
 {
     // Wraps an explicit producer batch size.
@@ -27,6 +29,7 @@ struct FramesPerWrite
     size_t value;
 };
 
+/// Explicit consumer window size.
 struct FramesPerRead
 {
     // Wraps an explicit consumer window size.
@@ -34,6 +37,7 @@ struct FramesPerRead
     size_t value;
 };
 
+/// Explicit count of frames retained between read windows.
 struct OverlapFrames
 {
     // Wraps the count retained between consumer windows.
@@ -65,6 +69,7 @@ constexpr OverlapFrames overlap_frames(size_t value) noexcept
     return OverlapFrames(value);
 }
 
+/// Producer identity, concurrency and write-batch configuration.
 struct ProducerConfig
 {
     // Uses one producer and one frame per write by default.
@@ -84,6 +89,7 @@ struct ProducerConfig
     size_t frames_per_write = 1;
 };
 
+/// Consumer identity, concurrency, read window and overlap configuration.
 struct ConsumerConfig
 {
     // Uses one consumer and one frame per read without overlap by default.

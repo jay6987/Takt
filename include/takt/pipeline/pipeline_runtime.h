@@ -10,6 +10,7 @@ namespace takt
 class NodeBase;
 class PipeBase;
 
+/// Owns the lifecycle of the nodes and pipes in a bound pipeline.
 class PipelineRuntime
 {
   public:
@@ -47,6 +48,15 @@ class PipelineRuntime
     // Collects nested runtimes and pipes while rejecting invalid tree reuse.
     void collect_tree(std::vector<PipelineRuntime*>& runtimes,
                       std::vector<std::shared_ptr<PipeBase>>& pipes);
+    // Rejects node ownership shared between runtimes.
+    static void validate_nodes(const std::vector<PipelineRuntime*>& runtimes);
+    // Validates all unique pipes before initializing any of them.
+    static void
+    initialize_pipes(const std::vector<std::shared_ptr<PipeBase>>& pipes);
+    // Validates the complete initialized tree before launching nodes.
+    void validate_start();
+    // Stops and joins after a partial startup failure.
+    [[noreturn]] void handle_start_failure(std::exception_ptr failure);
 
     std::vector<std::shared_ptr<NodeBase>> nodes_;
     std::vector<std::shared_ptr<PipeBase>> pipes_;

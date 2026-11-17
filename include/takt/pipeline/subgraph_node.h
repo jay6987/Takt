@@ -2,6 +2,7 @@
 #pragma once
 
 #include <atomic>
+#include <exception>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -17,9 +18,11 @@ namespace takt
 {
 class PipelineRuntime;
 
+/// Executes a nested pipeline and transfers frames across its boundaries.
 class SubgraphNode final : public NodeBase
 {
   public:
+    /// Pair of endpoints and labels for a subgraph boundary mapping.
     struct MappingLink
     {
         std::shared_ptr<AnyPipeEndpoint> source;
@@ -76,6 +79,13 @@ class SubgraphNode final : public NodeBase
     }
 
   private:
+    // Validates mappings and registers their lifecycle pipes.
+    void configure_mappings();
+    // Cleans up a partially started subgraph before rethrowing.
+    [[noreturn]] void handle_start_failure(std::exception_ptr failure);
+    // Records and propagates the first bridge failure.
+    void fail_bridge(MappingLink& link,
+                     const std::string& summary);
     // Transfers one bridge until closure, propagating boundary errors.
     void run_bridge(size_t index);
 

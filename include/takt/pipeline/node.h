@@ -1,7 +1,8 @@
 // Defines lazy node ingress, permanent workers and completion barriers.
 #pragma once
 
-#include <atomic>
+#include "takt/pipeline/node_base.h"
+
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -14,97 +15,8 @@
 
 namespace takt
 {
-class PipelineRuntime;
-
-struct NodeExceptionContext
-{
-    std::string pipeline_name;
-    std::string node_name;
-    std::string stage_name;
-    std::vector<std::string> input_port_names;
-    std::vector<std::string> output_port_names;
-    std::string stop_reason;
-    std::string message;
-    bool unknown_exception = false;
-    bool has_worker_index = false;
-    size_t worker_index = 0;
-};
-
-class NodeBase
-{
-  public:
-    // Establishes node identity without launching workers.
-    explicit NodeBase(std::string node_name);
-    // Releases the polymorphic node interface.
-    virtual ~NodeBase();
-
-    // Node lifecycle and failure state cannot be copied.
-    NodeBase(const NodeBase&) = delete;
-    // Prevents replacing a node referenced by runtime bindings.
-    NodeBase& operator=(const NodeBase&) = delete;
-
-    // Returns the node's diagnostic identity.
-    const std::string& name() const noexcept;
-
-    // Starts this initialized runtime node.
-    virtual void start() = 0;
-    // Waits for this node's execution to finish.
-    virtual void join() = 0;
-    // Exposes nested runtimes; ordinary nodes have no children.
-    virtual std::vector<std::shared_ptr<PipelineRuntime>> child_runtimes() const
-    {
-        return {};
-    }
-
-    // Sets the logical stage reported in exception context.
-    void set_stage_name(std::string stage_name);
-    // Sets the owning pipeline name reported in exception context.
-    void set_pipeline_name(std::string pipeline_name);
-    // Adds an input-port label to exception context.
-    void add_input_port_name(std::string input_port_name);
-    // Adds an output-port label to exception context.
-    void add_output_port_name(std::string output_port_name);
-    // Removes previously bound input-port context.
-    void clear_input_port_names() noexcept;
-    // Removes previously bound output-port context.
-    void clear_output_port_names() noexcept;
-
-    // Returns the configured logical stage.
-    const std::string& stage_name() const noexcept;
-    // Returns the configured owning pipeline.
-    const std::string& pipeline_name() const noexcept;
-    // Returns bound input-port labels.
-    const std::vector<std::string>& input_port_names() const noexcept;
-    // Returns bound output-port labels.
-    const std::vector<std::string>& output_port_names() const noexcept;
-
-    // Atomically requests cooperative node cancellation.
-    virtual void request_stop() noexcept;
-    // Reports the cooperative cancellation flag.
-    bool stop_requested() const noexcept;
-    // Returns the first remembered exception under synchronization.
-    std::exception_ptr failure() const;
-
-  protected:
-    // Retains the first execution failure for later runtime propagation.
-    void remember_failure(std::exception_ptr failure);
-    // Builds structured diagnostics for ingress or worker failures.
-    NodeExceptionContext build_exception_context(std::string message,
-                                                 bool unknown_exception,
-                                                 bool has_worker_index,
-                                                 size_t worker_index) const;
-
-  private:
-    std::string name_;
-    std::string pipeline_name_;
-    std::string stage_name_;
-    std::vector<std::string> input_port_names_;
-    std::vector<std::string> output_port_names_;
-    std::atomic<bool> stop_requested_{false};
-    mutable std::mutex failure_mutex_;
-    std::exception_ptr failure_;
-};
-
+/// Runs lazy ingress and permanent workers with destruction-aware barriers.
+/// Derived destructors must stop and join before destroying borrowed state.
 class Node : public NodeBase
 {
   public:
@@ -114,6 +26,7 @@ class Node : public NodeBase
         Stop,
     };
 
+    /// Owns an admitted payload until processing and completion hooks finish.
     struct Task
     {
         uint64_t sequence_id = 0;
@@ -163,8 +76,16 @@ class Node : public NodeBase
   private:
     // Drives ingress admission while retaining and reporting failures.
     void run_ingress_manager_wrapped();
+    // Builds tasks only after admission and drains each barrier before reuse.
+    void run_ingress_manager();
+    // Publishes one task unless cancellation closed its reserved worker slot.
+    bool hand_off_task(size_t worker_index,
+                       std::unique_ptr<Task>& task);
     // Drives one worker while retaining and reporting failures.
     void run_worker_wrapped(size_t worker_index);
+    // Processes and destroys one payload before releasing its drain count.
+    bool process_admitted_task(size_t worker_index,
+                               std::unique_ptr<Task>& task);
     // Closes task admission and wakes waiting workers.
     void close_task_admission() noexcept;
     // Releases unclaimed task slots outside the coordination lock.
@@ -179,6 +100,10 @@ class Node : public NodeBase
     // Retains and reports the active exception before task token cleanup.
     void handle_exception(bool has_worker_index,
                           size_t worker_index) noexcept;
+    // Converts a retained cause into standard or unknown failure diagnostics.
+    NodeExceptionContext describe_exception(std::exception_ptr cause,
+                                            bool has_worker_index,
+                                            size_t worker_index) const;
 
     size_t worker_count_;
     std::future<void> ingress_manager_;
