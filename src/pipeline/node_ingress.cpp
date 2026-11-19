@@ -34,12 +34,17 @@ void Node::run_ingress_manager_wrapped()
         handle_exception(false, 0);
     }
     if (statistics)
+    {
+        totals.task_build_time =
+            totals.first_task_build_time + totals.in_round_task_build_time;
         statistics_->ingress = totals;
+    }
 }
 
 void Node::run_ingress_manager(IngressStatistics* statistics)
 {
     uint64_t sequence_id = 0;
+    auto* build_time = statistics ? &statistics->first_task_build_time : nullptr;
     while (!stop_requested())
     {
         size_t worker_index = 0;
@@ -53,8 +58,7 @@ void Node::run_ingress_manager(IngressStatistics* statistics)
             break;
         auto task = [&]
         {
-            const StatisticsTimer timer(
-                statistics ? &statistics->task_build_time : nullptr);
+            const StatisticsTimer timer(build_time);
             return build_task(sequence_id);
         }();
         if (!task)
@@ -74,6 +78,9 @@ void Node::run_ingress_manager(IngressStatistics* statistics)
                 break;
             on_barrier_complete(sequence_id);
         }
+        if (statistics)
+            build_time = barrier ? &statistics->first_task_build_time
+                                 : &statistics->in_round_task_build_time;
         ++sequence_id;
     }
 }

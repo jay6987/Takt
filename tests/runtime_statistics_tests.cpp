@@ -18,8 +18,8 @@ using namespace std::chrono_literals;
 class CountingNode final : public takt::Node
 {
   public:
-    explicit CountingNode(bool fail = false)
-        : Node("count", 3), fail_(fail)
+    explicit CountingNode(bool fail = false, bool single_task_rounds = false)
+        : Node("count", 3), fail_(fail), single_task_rounds_(single_task_rounds)
     {
     }
 
@@ -29,7 +29,7 @@ class CountingNode final : public takt::Node
         if (sequence >= 5)
             return nullptr;
         auto task = std::make_unique<Task>();
-        task->barrier = sequence == 1 || sequence == 4;
+        task->barrier = single_task_rounds_ || sequence == 1 || sequence == 4;
         return task;
     }
 
@@ -46,6 +46,7 @@ class CountingNode final : public takt::Node
     }
 
     bool fail_;
+    bool single_task_rounds_;
 };
 
 std::shared_ptr<takt::Pipe<int>> make_pipe()
@@ -105,8 +106,28 @@ TEST(RuntimeStatistics, CountsWorkersAndReportsSharedNestedPipeOnce)
     }
     EXPECT_EQ(tasks, 5U);
     EXPECT_GT(node.ingress.worker_wait_time, 0ns);
-    EXPECT_GT(node.ingress.task_build_time, 0ns);
+    EXPECT_GT(node.ingress.first_task_build_time, 0ns);
+    EXPECT_GT(node.ingress.in_round_task_build_time, 0ns);
+    EXPECT_EQ(node.ingress.task_build_time,
+              node.ingress.first_task_build_time +
+                  node.ingress.in_round_task_build_time);
     EXPECT_GT(node.ingress.drain_wait_time, 0ns);
+}
+
+TEST(RuntimeStatistics, StartsNewBuildRoundAfterEachBarrier)
+{
+    takt::PipelineRuntime runtime({std::make_shared<CountingNode>(false, true)});
+    runtime.initialize();
+    runtime.enable_statistics();
+    runtime.start();
+    runtime.join();
+
+    const auto result = runtime.statistics();
+    ASSERT_EQ(result.nodes.size(), 1U);
+    const auto& ingress = result.nodes.front().ingress;
+    EXPECT_GT(ingress.first_task_build_time, 0ns);
+    EXPECT_EQ(ingress.in_round_task_build_time, 0ns);
+    EXPECT_EQ(ingress.task_build_time, ingress.first_task_build_time);
 }
 
 TEST(RuntimeStatistics, RetainsTaskFailureAfterJoinReportsIt)

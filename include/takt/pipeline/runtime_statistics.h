@@ -22,6 +22,8 @@ struct IngressStatistics
     std::chrono::nanoseconds worker_wait_time{};
     std::chrono::nanoseconds task_build_time{};
     std::chrono::nanoseconds drain_wait_time{};
+    std::chrono::nanoseconds first_task_build_time{};
+    std::chrono::nanoseconds in_round_task_build_time{};
 };
 
 struct NodeStatistics

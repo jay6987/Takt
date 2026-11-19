@@ -179,6 +179,11 @@ for admission to close. Ingress tracks waiting for a worker, building tasks,
 and scheduler barrier and shutdown drains separately. Subgraph paths identify
 nested nodes; bridge threads have no separate worker statistics.
 
+Total ingress build time is split into the first `build_task` call at startup
+or after a barrier, and subsequent calls before the next barrier. Both
+buckets time calls, including ones that return no task or throw, not worker
+idle time. A node without barriers has just one round.
+
 Each physical pipe is reported once, including pipes shared by direct subgraph
 connections. Peak nonreusable slots include write reservations, unread data,
 live read tokens, and retained overlap. A pipe wait is counted once when a
