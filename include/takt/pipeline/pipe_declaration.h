@@ -113,6 +113,8 @@ template <typename T> class Pipe : public PipeBase
     ReadToken acquire_read();
 
   private:
+    PipeCore* statistics_core() noexcept override { return core_.get(); }
+
     // Reserves initialized core slots and associates them with typed storage.
     WriteReservation acquire_write_reservation(size_t frame_count,
                                                bool is_shot_end);

@@ -156,6 +156,36 @@ before initialization and initialize before any prefill/close. See
 [Pipe Usage](docs/pipe-usage.md) for formulas, configured frame counts, and runtime
 preparation. The library still requires C++17.
 
+## Runtime statistics
+
+Opt in on the root runtime after initialization, before `start()`:
+
+```cpp
+runtime->enable_statistics();
+runtime->start();
+runtime->join();
+const auto snapshot = runtime->statistics();
+```
+
+With collection disabled, the snapshot is empty. With collection enabled,
+read it after `join()` completes, including when `join()` reports an execution
+failure. If the application also uses runtime pipes from external threads,
+finish those operations before reading the snapshot.
+
+Each processing node has entries indexed by worker number. Work time covers
+task processing and its completion hook, even if either throws; stop markers
+are not counted as tasks. Task wait time covers obtaining a task or waiting
+for admission to close. Ingress tracks waiting for a worker, building tasks,
+and scheduler barrier and shutdown drains separately. Subgraph paths identify
+nested nodes; bridge threads have no separate worker statistics.
+
+Each physical pipe is reported once, including pipes shared by direct subgraph
+connections. Peak nonreusable slots include write reservations, unread data,
+live read tokens, and retained overlap. A pipe wait is counted once when a
+read window or write reservation is not initially ready, even if it is later
+released by closure. Times are elapsed, not CPU time. Pipe waits may already
+be included in ingress or worker times, and different threads can overlap.
+
 ## Logger Injection
 
 Implement `takt::ILogger` and inject globally:

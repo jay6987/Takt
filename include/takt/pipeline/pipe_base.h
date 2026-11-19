@@ -9,6 +9,8 @@
 
 namespace takt
 {
+class PipeCore;
+
 /// Common configuration, lifecycle and capacity rules for typed pipes.
 class PipeBase
 {
@@ -132,6 +134,9 @@ class PipeBase
     bool cancelled_ = false;
 
   private:
+    friend class PipelineRuntime;
+    virtual PipeCore* statistics_core() noexcept { return nullptr; }
+
     // Multiplies capacity demands without unsigned overflow.
     size_t multiply(size_t a,
                     size_t b) const;

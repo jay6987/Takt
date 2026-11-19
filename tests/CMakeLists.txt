@@ -20,6 +20,7 @@ add_executable(takt_smoke_test
     runtime_initialization_tests.cpp
     runtime_startup_cleanup_tests.cpp
     runtime_pipe_preparation_tests.cpp
+    runtime_statistics_tests.cpp
     pipeline_builder_tests.cpp
     pipeline_builder_runtime_tests.cpp
     pipeline_builder_subgraph_tests.cpp

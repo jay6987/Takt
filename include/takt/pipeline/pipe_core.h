@@ -4,12 +4,14 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "takt/pipeline/pipe_errors.h"
 #include "takt/pipeline/pipe_windows.h"
+#include "takt/pipeline/runtime_statistics.h"
 
 namespace takt
 {
@@ -60,6 +62,7 @@ class PipeCore
     void release_read_window(size_t token_id);
 
   private:
+    friend class PipelineRuntime;
     /// Bookkeeping for a producer reservation awaiting ordered publication.
     struct PendingWrite
     {
@@ -144,5 +147,6 @@ class PipeCore
     bool unterminated_close_reported_ = false;
     std::string fault_message_;
     bool closed_ = false;
+    std::unique_ptr<PipeStatistics> statistics_;
 };
 } // namespace takt

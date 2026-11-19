@@ -3,6 +3,8 @@
 
 #include <algorithm>
 
+#include "statistics_timer.h"
+
 namespace takt
 {
 void PipeCore::validate_read(size_t frames_per_read,
@@ -60,8 +62,15 @@ PipeCoreFrameWindow PipeCore::acquire_read_window(size_t frames_per_read,
     if (frames_per_read - available_overlap > slot_capacity_)
         throw std::invalid_argument(
             "new read slots cannot exceed pipe capacity");
-    cv_.wait(lk, [this, frames_per_read, overlap_frames]
-             { return read_ready_locked(frames_per_read, overlap_frames); });
+    const auto ready = [this, frames_per_read, overlap_frames]
+    { return read_ready_locked(frames_per_read, overlap_frames); };
+    auto* wait = statistics_ && !ready() ? &statistics_->read_wait : nullptr;
+    {
+        const StatisticsTimer timer(wait ? &wait->time : nullptr);
+        cv_.wait(lk, ready);
+    }
+    if (wait)
+        ++wait->count;
     if (visible_frame_end_locked() == 0)
         throw_terminal_locked();
     return claim_read_locked(frames_per_read, overlap_frames);

@@ -1,13 +1,17 @@
 // Builds admitted tasks and drains barriers before acquiring another payload.
 #include "takt/pipeline/node.h"
 
+#include "statistics_timer.h"
+
 namespace takt
 {
 void Node::run_ingress_manager_wrapped()
 {
+    IngressStatistics totals;
+    auto* statistics = statistics_ ? &totals : nullptr;
     try
     {
-        run_ingress_manager();
+        run_ingress_manager(statistics);
     }
     catch (...)
     {
@@ -16,7 +20,11 @@ void Node::run_ingress_manager_wrapped()
     close_task_admission();
     if (stop_requested())
         discard_task_slots();
-    wait_for_tasks();
+    {
+        const StatisticsTimer timer(
+            statistics ? &statistics->drain_wait_time : nullptr);
+        wait_for_tasks();
+    }
     try
     {
         on_ingress_manager_done();
@@ -25,17 +33,30 @@ void Node::run_ingress_manager_wrapped()
     {
         handle_exception(false, 0);
     }
+    if (statistics)
+        statistics_->ingress = totals;
 }
 
-void Node::run_ingress_manager()
+void Node::run_ingress_manager(IngressStatistics* statistics)
 {
     uint64_t sequence_id = 0;
     while (!stop_requested())
     {
         size_t worker_index = 0;
-        if (!wait_for_task_admission(worker_index))
+        bool admitted;
+        {
+            const StatisticsTimer timer(
+                statistics ? &statistics->worker_wait_time : nullptr);
+            admitted = wait_for_task_admission(worker_index);
+        }
+        if (!admitted)
             break;
-        auto task = build_task(sequence_id);
+        auto task = [&]
+        {
+            const StatisticsTimer timer(
+                statistics ? &statistics->task_build_time : nullptr);
+            return build_task(sequence_id);
+        }();
         if (!task)
             break;
         task->sequence_id = sequence_id;
@@ -44,7 +65,11 @@ void Node::run_ingress_manager()
             break;
         if (barrier)
         {
-            wait_for_tasks();
+            {
+                const StatisticsTimer timer(
+                    statistics ? &statistics->drain_wait_time : nullptr);
+                wait_for_tasks();
+            }
             if (stop_requested() || failure())
                 break;
             on_barrier_complete(sequence_id);

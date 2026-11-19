@@ -2,6 +2,7 @@
 #pragma once
 
 #include "takt/pipeline/node_base.h"
+#include "takt/pipeline/runtime_statistics.h"
 
 #include <condition_variable>
 #include <cstdint>
@@ -74,10 +75,11 @@ class Node : public NodeBase
     virtual void on_exception(const NodeExceptionContext& context);
 
   private:
+    friend class PipelineRuntime;
     // Drives ingress admission while retaining and reporting failures.
     void run_ingress_manager_wrapped();
     // Builds tasks only after admission and drains each barrier before reuse.
-    void run_ingress_manager();
+    void run_ingress_manager(IngressStatistics* statistics);
     // Publishes one task unless cancellation closed its reserved worker slot.
     bool hand_off_task(size_t worker_index,
                        std::unique_ptr<Task>& task);
@@ -85,7 +87,8 @@ class Node : public NodeBase
     void run_worker_wrapped(size_t worker_index);
     // Processes and destroys one payload before releasing its drain count.
     bool process_admitted_task(size_t worker_index,
-                               std::unique_ptr<Task>& task);
+                               std::unique_ptr<Task>& task,
+                               WorkerStatistics* statistics);
     // Closes task admission and wakes waiting workers.
     void close_task_admission() noexcept;
     // Releases unclaimed task slots outside the coordination lock.
@@ -114,5 +117,7 @@ class Node : public NodeBase
     std::condition_variable admission_cv_;
     bool admission_closed_ = false;
     size_t outstanding_tasks_ = 0;
+    std::unique_ptr<NodeStatistics> statistics_;
+    bool statistics_started_ = false;
 };
 } // namespace takt

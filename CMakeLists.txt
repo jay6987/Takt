@@ -85,6 +85,7 @@ add_library(takt STATIC
     src/pipeline/builder_runtime.cpp
     src/pipeline/pipeline_runtime.cpp
     src/pipeline/runtime_initialization.cpp
+    src/pipeline/runtime_statistics.cpp
     src/pipeline/pipe_base.cpp
     src/pipeline/pipe_core.cpp
     src/pipeline/pipe_core_write.cpp

@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 
+#include "takt/pipeline/runtime_statistics.h"
+
 namespace takt
 {
 class NodeBase;
@@ -35,6 +37,10 @@ class PipelineRuntime
     void join();
     // Requests node cancellation and closes all lifecycle pipes.
     void request_stop();
+    // Enables statistics before start, with no concurrent pipe operations.
+    void enable_statistics();
+    // Reads a snapshot after join (including failed runs); empty when disabled.
+    RuntimeStatistics statistics() const;
 
   private:
     enum class State
@@ -57,10 +63,17 @@ class PipelineRuntime
     void validate_start();
     // Stops and joins after a partial startup failure.
     [[noreturn]] void handle_start_failure(std::exception_ptr failure);
+    void append_statistics(const std::string& prefix,
+                           RuntimeStatistics& result,
+                           std::vector<const PipeBase*>& seen_pipes) const;
 
     std::vector<std::shared_ptr<NodeBase>> nodes_;
     std::vector<std::shared_ptr<PipeBase>> pipes_;
     State state_ = State::Created;
     std::exception_ptr initialization_failure_;
+    enum class StatisticsMode { Disabled, Root, Child };
+    StatisticsMode statistics_mode_ = StatisticsMode::Disabled;
+    bool start_attempted_ = false;
+    bool joined_ = false;
 };
 } // namespace takt

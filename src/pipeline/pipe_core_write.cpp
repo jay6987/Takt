@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "statistics_timer.h"
+
 namespace takt
 {
 void PipeCore::validate_write(size_t frame_count) const
@@ -29,13 +31,19 @@ PipeCoreWriteReservation PipeCore::reserve_write(size_t frame_count,
 {
     validate_write(frame_count);
     std::unique_lock<std::mutex> lk(mutex_);
-    cv_.wait(lk,
-             [this, frame_count]
-             {
-                 return closed_ || write_failure_ ||
-                        (write_reserved_frame_end_ + frame_count <=
-                         reusable_frame_start_locked() + slot_capacity_);
-             });
+    const auto ready = [this, frame_count]
+    {
+        return closed_ || write_failure_ ||
+               (write_reserved_frame_end_ + frame_count <=
+                reusable_frame_start_locked() + slot_capacity_);
+    };
+    auto* wait = statistics_ && !ready() ? &statistics_->write_wait : nullptr;
+    {
+        const StatisticsTimer timer(wait ? &wait->time : nullptr);
+        cv_.wait(lk, ready);
+    }
+    if (wait)
+        ++wait->count;
 
     if (write_failure_)
     {
@@ -68,6 +76,10 @@ PipeCoreWriteReservation PipeCore::claim_write_locked(size_t frame_count,
         reservation.token_id, reservation.start_frame_index, frame_count,
         reservation.is_shot_start, reservation.is_shot_end, false, false});
     write_reserved_frame_end_ += frame_count;
+    if (statistics_)
+        statistics_->peak_unreusable_slots = std::max(
+            statistics_->peak_unreusable_slots,
+            write_reserved_frame_end_ - reusable_frame_start_locked());
     next_write_is_shot_start_ = is_shot_end;
 
     return reservation;

@@ -37,6 +37,8 @@ void Node::start()
     }
     ingress_manager_ = std::async(std::launch::async,
                                   &Node::run_ingress_manager_wrapped, this);
+    if (statistics_)
+        statistics_started_ = true;
     workers_.reserve(worker_count_);
     for (size_t i = 0; i < worker_count_; ++i)
     {

@@ -48,6 +48,8 @@ void PipelineRuntime::start()
     if (state_ != State::Initialized)
         throw std::logic_error("runtime must be initialized before start");
     validate_start();
+    start_attempted_ = true;
+    joined_ = false;
     try
     {
         for (auto& node : nodes_)
@@ -117,6 +119,7 @@ void PipelineRuntime::join()
             }
         }
     }
+    joined_ = start_attempted_;
     if (failure)
     {
         std::rethrow_exception(failure);
