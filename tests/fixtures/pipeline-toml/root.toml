@@ -1,0 +1,18 @@
+version = 1
+
+[execution]
+default_workers = 3
+
+[subgraphs]
+wrapper = { file = "nested.toml" }
+
+[nodes.source]
+type = "custom.source"
+
+[nodes.wrapper]
+subgraph = "wrapper"
+
+[pipes.source-wrapper]
+from = "source.out"
+to = "wrapper.in"
+capacity = { mode = "fixed", slots = 2 }

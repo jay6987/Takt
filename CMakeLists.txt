@@ -7,6 +7,7 @@ include(CMakePackageConfigHelpers)
 
 option(TAKT_BUILD_EXAMPLES "Build Takt examples" OFF)
 option(TAKT_BUILD_TESTS "Build Takt tests" OFF)
+option(TAKT_BUILD_TOML_CONFIG "Build the optional TOML pipeline configuration API" OFF)
 option(TAKT_WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
 option(TAKT_COVERAGE "Instrument with LLVM source coverage" OFF)
 option(TAKT_BUILD_QUALITY_TOOLS "Build the shared AST source checker" OFF)
@@ -144,6 +145,51 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/TaktConfigVersion.cmake"
     DESTINATION "${TAKT_INSTALL_CMAKEDIR}"
 )
+
+if(TAKT_BUILD_TOML_CONFIG)
+    if(NOT TARGET tomlplusplus::tomlplusplus)
+        find_package(tomlplusplus CONFIG REQUIRED)
+    endif()
+
+    add_library(takt_toml_config STATIC
+        src/pipeline/pipeline_toml_config.cpp
+        src/pipeline/pipeline_toml_dot.cpp)
+    add_library(takt::toml_config ALIAS takt_toml_config)
+    set_target_properties(takt_toml_config PROPERTIES
+        EXPORT_NAME toml_config
+        CXX_EXTENSIONS OFF)
+    target_compile_features(takt_toml_config PUBLIC cxx_std_17)
+    target_include_directories(takt_toml_config
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_include_directories(takt_toml_config SYSTEM PRIVATE
+        $<TARGET_PROPERTY:tomlplusplus::tomlplusplus,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(takt_toml_config PUBLIC takt::takt)
+    takt_warnings(takt_toml_config)
+
+    install(TARGETS takt_toml_config
+        EXPORT TaktTomlTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+    install(EXPORT TaktTomlTargets
+        FILE TaktTomlTargets.cmake
+        NAMESPACE takt::
+        DESTINATION "${TAKT_INSTALL_CMAKEDIR}")
+
+    configure_package_config_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TaktTomlConfig.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/TaktTomlConfig.cmake"
+        INSTALL_DESTINATION "${TAKT_INSTALL_CMAKEDIR}")
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/TaktTomlConfigVersion.cmake"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY SameMinorVersion)
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/TaktTomlConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/TaktTomlConfigVersion.cmake"
+        DESTINATION "${TAKT_INSTALL_CMAKEDIR}")
+endif()
 
 if(TAKT_BUILD_EXAMPLES)
     add_subdirectory(examples)

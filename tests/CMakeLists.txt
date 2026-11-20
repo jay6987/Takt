@@ -72,6 +72,20 @@ target_link_libraries(takt_smoke_test
 gtest_discover_tests(takt_smoke_test)
 takt_warnings(takt_smoke_test)
 
+if(TAKT_BUILD_TOML_CONFIG)
+    add_executable(takt_toml_config_test pipeline_toml_config_test.cpp)
+    target_link_libraries(takt_toml_config_test
+        PRIVATE takt::toml_config GTest::gtest_main)
+    target_compile_definitions(takt_toml_config_test PRIVATE
+        TAKT_TOML_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pipeline-toml")
+    set_target_properties(takt_toml_config_test PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO)
+    gtest_discover_tests(takt_toml_config_test)
+    takt_warnings(takt_toml_config_test)
+endif()
+
 if(TAKT_BUILD_EXAMPLES)
     set(example_working_directory "${CMAKE_CURRENT_BINARY_DIR}/example-smoke")
     file(MAKE_DIRECTORY "${example_working_directory}")

@@ -73,6 +73,26 @@ find_package(Takt 0.2 CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE takt::takt)
 ```
 
+### Optional TOML pipeline configuration
+
+The C++ `PipelineBuilder` API remains the core way to declare a pipeline.
+TOML loading is an optional component, disabled by default, for applications
+that prefer file-based graph descriptions:
+
+```cmake
+find_package(tomlplusplus CONFIG REQUIRED)
+set(TAKT_BUILD_TOML_CONFIG ON)
+add_subdirectory(path/to/Takt)
+target_link_libraries(your_target PRIVATE takt::toml_config)
+```
+
+For an installed Takt package built with this option, link
+`takt::toml_config` after `find_package(TaktToml CONFIG REQUIRED)`. It provides
+`takt::read_pipeline_toml()` and `takt::export_pipeline_toml_dot()`.
+Node type names are opaque to Takt; applications resolve them to their own
+runtime node implementations. TOML and `tomlplusplus` are not dependencies of
+the core `takt::takt` target.
+
 ```cpp
 #include "takt/takt.h"
 

@@ -1,0 +1,10 @@
+version = 1
+
+[inputs]
+in = "scale.in"
+
+[outputs]
+out = "scale.out"
+
+[nodes.scale]
+type = "custom.scale"
