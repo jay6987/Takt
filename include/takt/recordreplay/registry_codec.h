@@ -40,8 +40,11 @@ RecordReplayRegistry::resolve_codec_for_type() const
         { is.read(reinterpret_cast<char*>(value), sizeof(T)); };
         return codec;
     }
-    throw std::runtime_error(
-        "no codec registered for non-trivially-copyable type; call "
-        "takt::recordreplay::register_codec<T>() first");
+    else
+    {
+        throw std::runtime_error(
+            "no codec registered for non-trivially-copyable type; call "
+            "takt::recordreplay::register_codec<T>() first");
+    }
 }
 } // namespace takt::recordreplay::detail
